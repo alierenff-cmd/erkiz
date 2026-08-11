@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <!-- CSRF token sunucu tarafinda sablona enjekte edilmeli -->
+    <meta name="csrf-token" content="__CSRF_TOKEN__">
+    <title>Erkiz İşçi - Yönetici Paneli</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="admin.css?v=20260810">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="vendor/qrcode.min.js" defer></script>
+    <script src="admin.js?v=20260810v3" defer></script>
+</head>
+<body class="admin-body">
+    <div class="glass-container admin-container">
+        <header class="admin-header">
+            <h1>Yönetici Paneli</h1>
+            <span id="record-count" class="record-count"></span>
+        </header>
+
+        <section class="panel">
+            <h3>İşçi & Doğum Günü Yönetimi</h3>
+
+            <!-- Yeni İşçi / Doğum Günü Ekleme Formu -->
+            <div class="qr-row" style="margin-bottom: 16px; flex-wrap: wrap;">
+                <div class="field" style="flex: 1; min-width: 130px;">
+                    <label for="worker-tc">T.C. Kimlik No</label>
+                    <input type="text" id="worker-tc" maxlength="11" placeholder="11 Hane">
+                </div>
+                <div class="field" style="flex: 1; min-width: 120px;">
+                    <label for="worker-first">Ad</label>
+                    <input type="text" id="worker-first" maxlength="50" placeholder="Ad">
+                </div>
+                <div class="field" style="flex: 1; min-width: 120px;">
+                    <label for="worker-last">Soyad</label>
+                    <input type="text" id="worker-last" maxlength="50" placeholder="Soyad">
+                </div>
+                <div class="field" style="flex: 1; min-width: 130px;">
+                    <label for="worker-bdate">Doğum Tarihi</label>
+                    <input type="date" id="worker-bdate">
+                </div>
+                <button id="btn-add-worker" class="btn btn-primary" style="width: auto;">İşçi Ekle</button>
+            </div>
+
+            <!-- Toplu Dosya / CSV Yükleme -->
+            <div style="margin-bottom: 16px; padding: 10px; background: rgba(0, 112, 210, 0.04); border-radius: 8px; border: 1px dashed rgba(0, 112, 210, 0.3); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <label for="file-import-workers" class="btn btn-neutral" style="cursor: pointer; width: auto; margin: 0; padding: 6px 12px; font-size: 0.85rem;">📁 Toplu CSV / Excel Seç</label>
+                    <input type="file" id="file-import-workers" accept=".csv,.txt" hidden>
+                    <span id="selected-file-name" style="font-size: 0.85rem; color: var(--ios-gray);">Henüz dosya seçilmedi</span>
+                </div>
+                <button id="btn-import-csv" class="btn btn-primary" style="width: auto; background-color: #0070d2; padding: 6px 12px; font-size: 0.85rem;" disabled>Toplu İçe Aktar</button>
+            </div>
+
+            <!-- Filtreleme ve Arama Barı -->
+            <div style="margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <input type="text" id="search-workers" placeholder="İşçi Adı veya T.C. Ara..." style="padding: 8px 12px; border-radius: 8px; border: 1px solid var(--ios-border); width: 220px; font-size: 0.9rem;">
+                    <select id="filter-workers" style="padding: 8px 12px; border-radius: 8px; border: 1px solid var(--ios-border); font-size: 0.88rem;">
+                        <option value="all" selected>👥 Tüm Kayıtlı İşçiler (143 İşçi)</option>
+                        <option value="bday">🎂 Sadece Doğum Günü Olanlar (Bu Hafta)</option>
+                    </select>
+                </div>
+                <span id="workers-count-badge" style="font-size: 0.85rem; font-weight: 600; color: var(--ios-text-secondary); white-space: nowrap;"></span>
+            </div>
+
+            <div id="workers-list-wrap" style="max-height: 200px; overflow-y: auto; background: #fff; border-radius: 8px; border: 0.5px solid var(--ios-border); padding: 8px 12px;">
+                <ul id="workers-list" style="list-style: none; margin: 0; padding: 0;"></ul>
+            </div>
+        </section>
+
+        <section class="panel">
+            <h3>Proje Yönetimi</h3>
+            <div class="qr-row" style="margin-bottom: 16px;">
+                <div class="field" style="flex: 1;">
+                    <label for="new-project-code">Proje Kodu</label>
+                    <input type="text" id="new-project-code" maxlength="50" placeholder="Örn: PRJ-583">
+                </div>
+                <div class="field" style="flex: 2;">
+                    <label for="new-project-name">Proje Adı</label>
+                    <input type="text" id="new-project-name" maxlength="150" placeholder="Örn: Dalsan Şantiye">
+                </div>
+                <button id="btn-add-project" class="btn btn-primary" style="width: auto;">Proje Ekle</button>
+            </div>
+            <div id="projects-list-wrap" style="max-height: 150px; overflow-y: auto; background: #fff; border-radius: 8px; border: 0.5px solid var(--ios-border); padding: 8px 12px;">
+                <ul id="projects-list" style="list-style: none; margin: 0; padding: 0;"></ul>
+            </div>
+        </section>
+
+        <section class="panel">
+            <h3>Saha QR Kodu Oluştur & Kayıtlı Sahalar</h3>
+            <div class="qr-row" style="margin-bottom: 16px;">
+                <div class="field" style="flex: 1;">
+                    <label for="saha-adi">Saha Adı</label>
+                    <input type="text" id="saha-adi" maxlength="100" placeholder="Örn: DALSAN ŞANTİYE SAHASI">
+                </div>
+                <button id="btn-generate-qr" class="btn btn-primary" style="width: auto;">QR Kodu Oluştur ve Kaydet</button>
+            </div>
+            
+            <div id="qr-list-wrap" style="max-height: 180px; overflow-y: auto; background: #fff; border-radius: 8px; border: 0.5px solid var(--ios-border); padding: 8px 12px; margin-bottom: 16px;">
+                <ul id="qr-list" style="list-style: none; margin: 0; padding: 0;"></ul>
+            </div>
+
+            <div id="qrcode-display" class="qr-display" hidden></div>
+            <div id="qr-actions" style="margin-top: 12px; display: flex; justify-content: center; gap: 10px;" hidden>
+                <button id="btn-print" class="btn btn-checkout no-print" style="width: auto;">Yazdır / Kaydet</button>
+                <button id="btn-close-qr" class="btn btn-neutral no-print" style="width: auto;">Gösterimi Kapat</button>
+            </div>
+        </section>
+
+        <div class="controls no-print">
+            <button id="btn-refresh" class="btn btn-primary">Listeyi Yenile</button>
+            <button id="btn-csv" class="btn btn-csv">Excel (CSV) İndir</button>
+            <button id="btn-sap-csv" class="btn btn-primary" style="background-color: #0070d2;">SAP CSV İndir</button>
+            <button id="btn-sap-al11" class="btn btn-primary" style="background-color: #1b96ff;">SAP AL11 Klasörüne Gönder</button>
+            <button id="btn-logout" class="btn btn-neutral">Çıkış Yap</button>
+        </div>
+
+        <div class="table-wrap">
+            <table id="logs-table">
+                <thead>
+                    <tr>
+                        <th>TC No</th>
+                        <th>Ad Soyad</th>
+                        <th>Saha (QR)</th>
+                        <th>Proje</th>
+                        <th>Aktivite</th>
+                        <th>Giriş</th>
+                        <th>Çıkış</th>
+                        <th>Süre</th>
+                        <th>Konum</th>
+                        <th>Saha Durumu</th>
+                        <th>İşlem</th>
+                    </tr>
+                </thead>
+                <tbody id="logs-body"></tbody>
+            </table>
+        </div>
+
+        <p class="kvkk-note">
+            Bu ekrandaki veriler kişisel veridir. TC kimlik numaraları maskelenmiştir.
+            Erişiminiz loglanmaktadır. Verileri yetkisiz kişilerle paylaşmayınız.
+        </p>
+    </div>
+
+    <!-- Çalışma Alanı / Geofence Modalı -->
+    <div id="modal-geofence" class="modal-overlay" hidden>
+        <div class="modal-content" style="max-width: 650px; width: 95%;">
+            <h3 style="margin-top:0; margin-bottom:8px;">🗺️ Saha Çalışma Alanı / Konum Sınırı Belirle</h3>
+            <p id="geofence-site-title" style="color: var(--ios-text-secondary); margin-bottom: 12px; font-weight: 600;"></p>
+
+            <div id="geofence-map" style="height: 320px; border-radius: 8px; border: 1px solid var(--ios-border); margin-bottom: 12px;"></div>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px;">
+                <div class="field" style="flex: 1; min-width: 120px;">
+                    <label>Merkez Enlem (Lat)</label>
+                    <input type="number" step="any" id="gf-lat" placeholder="Örn: 39.9207">
+                </div>
+                <div class="field" style="flex: 1; min-width: 120px;">
+                    <label>Merkez Boylam (Lng)</label>
+                    <input type="number" step="any" id="gf-lng" placeholder="Örn: 32.8541">
+                </div>
+                <div class="field" style="flex: 1; min-width: 100px;">
+                    <label>İzin Verilen Yarıçap (Metre)</label>
+                    <input type="number" id="gf-radius" value="500" placeholder="Metre">
+                </div>
+            </div>
+
+            <div style="display:flex; gap:12px; justify-content:flex-end;">
+                <button id="btn-cancel-geofence" class="btn btn-neutral" style="width:auto; padding:8px 16px;">İptal</button>
+                <button id="btn-save-geofence" class="btn btn-primary" style="width:auto; padding:8px 16px;">Çalışma Alanını Kaydet</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Manuel Çıkış Modalı -->
+    <div id="modal-checkout" class="modal-overlay" hidden>
+        <div class="modal-content">
+            <h3 style="margin-top:0; margin-bottom:12px;">Manuel İşçi Çıkışı Yap</h3>
+            <p id="modal-checkout-worker-info" style="color: var(--ios-text-secondary); margin-bottom: 20px; font-weight: 500;"></p>
+
+            <div class="field">
+                <label for="checkout-datetime">Çıkış Tarihi ve Saati</label>
+                <input type="datetime-local" id="checkout-datetime" style="width:100%; padding:10px; border-radius:8px; border:1px solid #ccc; font-size:1rem;">
+            </div>
+
+            <div style="display:flex; gap:12px; margin-top:24px; justify-content:flex-end;">
+                <button id="btn-cancel-checkout" class="btn btn-neutral" style="width:auto; padding:10px 20px;">İptal</button>
+                <button id="btn-confirm-checkout" class="btn btn-checkout" style="width:auto; padding:10px 20px; background-color:#FF9500;">Çıkış Kaydet</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

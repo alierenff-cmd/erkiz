@@ -1,0 +1,4 @@
+- [ ] `server/public/style.css` iOS 17+ tasarımı ile güncellenmesi
+- [ ] `server/public/admin.css` tablo ve panel iyileştirmeleri
+- [ ] `server/public/login.html` ve `server/public/admin.html` yapısal güncellemeleri
+- [ ] Değişikliklerin doğrulanması

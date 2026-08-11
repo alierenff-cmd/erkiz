@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="__CSRF_TOKEN__">
+    <title>Erkiz İşçi - Yönetici Girişi</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="login.js" defer></script>
+</head>
+<body>
+    <div class="glass-container login-container">
+        <h1>Yönetici Girişi</h1>
+
+        <div id="error-msg" class="field-error" role="alert" hidden></div>
+
+        <div class="field">
+            <label for="username">Kullanıcı Adı</label>
+            <input type="text" id="username" autocomplete="username">
+        </div>
+
+        <div class="field">
+            <label for="password">Şifre</label>
+            <input type="password" id="password" autocomplete="current-password">
+        </div>
+
+        <button id="btn-login" class="btn btn-primary full">Giriş Yap</button>
+    </div>
+</body>
+</html>

@@ -1,0 +1,9 @@
+arap <?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Yerel agda test ve IP baglantilari icin HTTP izni -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

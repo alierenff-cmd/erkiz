@@ -1,0 +1,20 @@
+{
+  "appId": "com.erkiz.iscitakip",
+  "appName": "Erkiz İşçi",
+  "webDir": "app/src/main/assets",
+  "server": {
+    "androidScheme": "https",
+    "iosScheme": "https",
+    "allowNavigation": [
+      "*"
+    ]
+  },
+  "plugins": {
+    "Camera": {
+      "permissions": ["camera"]
+    },
+    "Geolocation": {
+      "permissions": ["location"]
+    }
+  }
+}
