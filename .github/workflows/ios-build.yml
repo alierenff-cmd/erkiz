@@ -28,6 +28,10 @@ jobs:
           npx cap add ios || true
           npx cap copy ios
           npx cap sync ios
+          echo "Injecting iOS Permissions (NSCameraUsageDescription, NSLocationWhenInUseUsageDescription) into Info.plist..."
+          plutil -insert NSCameraUsageDescription -string "QR kod okutabilmek için kamera izni gereklidir." ios/App/App/Info.plist || plutil -replace NSCameraUsageDescription -string "QR kod okutabilmek için kamera izni gereklidir." ios/App/App/Info.plist
+          plutil -insert NSLocationWhenInUseUsageDescription -string "Giriş-çıkış anında konum doğrulaması için konum izni gereklidir." ios/App/App/Info.plist || plutil -replace NSLocationWhenInUseUsageDescription -string "Giriş-çıkış anında konum doğrulaması için konum izni gereklidir." ios/App/App/Info.plist
+          plutil -insert NSLocationAlwaysAndWhenInUseUsageDescription -string "Giriş-çıkış anında konum doğrulaması için konum izni gereklidir." ios/App/App/Info.plist || plutil -replace NSLocationAlwaysAndWhenInUseUsageDescription -string "Giriş-çıkış anında konum doğrulaması için konum izni gereklidir." ios/App/App/Info.plist
 
       - name: Build iOS App & Create IPA
         run: |
