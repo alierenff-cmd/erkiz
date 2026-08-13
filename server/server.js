@@ -477,14 +477,21 @@ app.post('/api/admin/login', loginLimiter, async (req, res) => {
     // olarak farkli isimlendirildi.
     const username = String(req.body.username || '');
     const plainPassword = String(req.body.password || '');
+    const securityPin = String(req.body.security_pin || '').trim();
 
     const userOk = username === process.env.ADMIN_USERNAME;
     const passOk = await password.compare(
         plainPassword, process.env.ADMIN_PASSWORD_HASH);
+    
+    // Eger .env icinde ADMIN_SECURITY_PIN tanimliysa kontrol et
+    let pinOk = true;
+    if (process.env.ADMIN_SECURITY_PIN && process.env.ADMIN_SECURITY_PIN.trim().length > 0) {
+        pinOk = (securityPin === process.env.ADMIN_SECURITY_PIN.trim());
+    }
 
     // Hangisinin yanlis oldugunu sizdirmiyoruz.
-    if (!userOk || !passOk) {
-        return res.status(401).json({ error: 'Giriş bilgileri hatalı.' });
+    if (!userOk || !passOk || !pinOk) {
+        return res.status(401).json({ error: 'Giriş bilgileri veya Güvenlik PIN kodu hatalı.' });
     }
 
     const session = jwt.sign({ role: 'admin', user: username },
