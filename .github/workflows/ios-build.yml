@@ -9,6 +9,9 @@ jobs:
   build-ios:
     name: Build iOS IPA on Cloud macOS
     runs-on: macos-latest
+    timeout-minutes: 10
+    env:
+      COCOAPODS_DISABLE_STATS: "true"
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -21,30 +24,33 @@ jobs:
       - name: Install Dependencies
         run: |
           npm install -g @capacitor/cli
-          npm install
+          npm install --no-audit --no-fund
 
       - name: Build Web Assets & Add iOS Platform
         run: |
           npx cap add ios || true
           npx cap copy ios
           npx cap sync ios
-          echo "Injecting iOS Permissions (NSCameraUsageDescription, NSLocationWhenInUseUsageDescription) into Info.plist..."
-          plutil -insert NSCameraUsageDescription -string "QR kod okutabilmek için kamera izni gereklidir." ios/App/App/Info.plist || plutil -replace NSCameraUsageDescription -string "QR kod okutabilmek için kamera izni gereklidir." ios/App/App/Info.plist
-          plutil -insert NSLocationWhenInUseUsageDescription -string "Giriş-çıkış anında konum doğrulaması için konum izni gereklidir." ios/App/App/Info.plist || plutil -replace NSLocationWhenInUseUsageDescription -string "Giriş-çıkış anında konum doğrulaması için konum izni gereklidir." ios/App/App/Info.plist
-          plutil -insert NSLocationAlwaysAndWhenInUseUsageDescription -string "Giriş-çıkış anında konum doğrulaması için konum izni gereklidir." ios/App/App/Info.plist || plutil -replace NSLocationAlwaysAndWhenInUseUsageDescription -string "Giriş-çıkış anında konum doğrulaması için konum izni gereklidir." ios/App/App/Info.plist
 
-      - name: Build iOS App & Create IPA
+      - name: Build iOS App Project
         run: |
           echo "Building iOS App Bundle via Xcodebuild on GitHub Cloud macOS..."
           cd ios/App
-          pod install || true
-          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
-          mkdir -p Payload
-          cp -r build/Build/Products/Release-iphoneos/App.app Payload/
-          zip -r ErkizIsciTakip.ipa Payload
+          pod install --no-repo-update || true
+          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -derivedDataPath build -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO build
 
-      - name: Upload IPA Artifact
+      - name: Package IPA for Diawi
+        run: |
+          cd ios/App
+          mkdir -p Payload
+          APP_PATH=$(find build -name "App.app" -type d | head -n 1)
+          echo "Found App.app at: $APP_PATH"
+          cp -R "$APP_PATH" Payload/
+          zip -r ErkizIsci.ipa Payload
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ErkizIsciTakip-iOS-IPA
-          path: ios/App/ErkizIsciTakip.ipa
+          name: ErkizIsci-iOS-App
+          path: ios/App/ErkizIsci.ipa
+

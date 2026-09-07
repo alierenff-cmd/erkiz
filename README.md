@@ -88,6 +88,35 @@ mysql -u root -p -e "CREATE USER 'erkiz_app'@'localhost' IDENTIFIED BY '<şifre>
 npm start
 ```
 
+### Amazon VPS (AWS Lightsail / EC2 - Ubuntu) Tek Tıkla Kurulum
+
+AWS Lightsail veya EC2 üzerinde bir **Ubuntu 22.04 / 24.04** örneği açtıktan sonra:
+
+1. **AWS Güvenlik Grubu (Security Group) Ayarları:**
+   * Port `22` (SSH): Sizin IP'niz
+   * Port `80` (HTTP): `0.0.0.0/0`
+   * Port `443` (HTTPS): `0.0.0.0/0`
+   *(Port 3000 ve 3306'yı dışarıya AÇMAYIN; Nginx içeriden güvenle yönlendirir).*
+
+2. **Sunucuda Kurulum Betiğini Çalıştırın:**
+```bash
+git clone https://github.com/alierenff-cmd/erkiz.git
+cd erkiz/server
+sudo bash setup-amazon-vps.sh
+```
+Bu betik Node.js 20, MySQL, Nginx, UFW ve PM2'yi otomatik kurar, veritabanını oluşturur ve uygulamayı 7/24 çalışır hale getirir.
+
+3. **Ücretsiz SSL (HTTPS) Kurulumu:**
+```bash
+sudo certbot --nginx -d takip.erkizmuhendislik.com
+```
+
+4. **Docker İle Dağıtım (Alternatif):**
+```bash
+docker compose up -d
+```
+
+
 ### Android
 
 ```bash

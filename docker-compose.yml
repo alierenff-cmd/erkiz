@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: erkiz-takip-app
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=erkiz_app
+      - DB_PASSWORD=erkiz_secure_db_pass_2026
+      - DB_NAME=erkiz_takip
+      - JWT_SECRET=change_this_to_a_random_32_byte_secret_key_in_prod
+      - SESSION_SECRET=change_this_to_another_random_secret_in_prod
+      - TC_ENCRYPTION_KEY=change_this_to_another_random_32_byte_key_in_prod
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD_HASH=scrypt$32768$8$1$R+AJMmV9gMwSikPECuYOQw==$HY2qfU3xeMxPfzrnStzxO5vYfgM+H7mtyJRAXkY8/uDGhBLAFPcPNVbgVTKnvR21M2U736hp6oTQt4m53KzyyA==
+      - ADMIN_SECURITY_PIN=123456
+      - SAP_AL11_DIR=/var/data/sap_al11_export
+    volumes:
+      - sap_data:/var/data/sap_al11_export
+      - ./server/logs:/usr/src/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  mysql:
+    image: mysql:8.0
+    container_name: erkiz-takip-mysql
+    restart: always
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: erkiz_root_password_2026
+      MYSQL_DATABASE: erkiz_takip
+      MYSQL_USER: erkiz_app
+      MYSQL_PASSWORD: erkiz_secure_db_pass_2026
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./server/schema.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "erkiz_app", "-perkiz_secure_db_pass_2026"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mysql_data:
+  sap_data:

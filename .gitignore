@@ -11,3 +11,6 @@ captures/
 google-services.json
 server/node_modules/
 server/.env
+server/logs/
+*.ipa
+

@@ -271,7 +271,7 @@
                     });
                 }
             } catch (e) {}
-        }, 10 * 60 * 1000); // 10 dakikada 1
+        }, 15 * 60 * 1000); // 15 dakikada 1
     }
 
     function stopPeriodicLocationPing() {

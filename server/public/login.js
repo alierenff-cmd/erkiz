@@ -12,7 +12,6 @@
         const btn = el('btn-login');
         const user = el('username').value.trim();
         const pass = el('password').value;
-        const pin = el('security_pin') ? el('security_pin').value.trim() : '';
 
         if (!user || !pass) {
             showError('Kullanıcı adı ve şifre giriniz.');
@@ -31,7 +30,7 @@
                     'Content-Type': 'application/json',
                     'X-CSRF-Token': meta ? meta.content : ''
                 },
-                body: JSON.stringify({ username: user, password: pass, security_pin: pin })
+                body: JSON.stringify({ username: user, password: pass })
             });
 
             if (res.ok) {

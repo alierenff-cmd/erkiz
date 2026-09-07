@@ -416,7 +416,7 @@ app.post('/api/check-out', actionLimiter, requireDevice,
              console.error(err); res.status(500).json({ message: 'Sunucu hatası.' });
          }));
 
-/* ---------------- 10 Dakikalık Konum Takip Sinyali (18:00 Koruması) ---------------- */
+/* ---------------- 15 Dakikalık Konum Takip Sinyali (18:00 Koruması) ---------------- */
 
 app.post('/api/location-ping', actionLimiter, requireDevice, async (req, res) => {
     try {
@@ -477,21 +477,14 @@ app.post('/api/admin/login', loginLimiter, async (req, res) => {
     // olarak farkli isimlendirildi.
     const username = String(req.body.username || '');
     const plainPassword = String(req.body.password || '');
-    const securityPin = String(req.body.security_pin || '').trim();
 
     const userOk = username === process.env.ADMIN_USERNAME;
     const passOk = await password.compare(
         plainPassword, process.env.ADMIN_PASSWORD_HASH);
-    
-    // Eger .env icinde ADMIN_SECURITY_PIN tanimliysa kontrol et
-    let pinOk = true;
-    if (process.env.ADMIN_SECURITY_PIN && process.env.ADMIN_SECURITY_PIN.trim().length > 0) {
-        pinOk = (securityPin === process.env.ADMIN_SECURITY_PIN.trim());
-    }
 
     // Hangisinin yanlis oldugunu sizdirmiyoruz.
-    if (!userOk || !passOk || !pinOk) {
-        return res.status(401).json({ error: 'Giriş bilgileri veya Güvenlik PIN kodu hatalı.' });
+    if (!userOk || !passOk) {
+        return res.status(401).json({ error: 'Giriş bilgileri hatalı.' });
     }
 
     const session = jwt.sign({ role: 'admin', user: username },
@@ -1112,12 +1105,21 @@ setInterval(enforceRetention, 24 * 60 * 60 * 1000);
 
 /* ---------------- Statik dosyalar ---------------- */
 
+// İşçi Mobil Web Uygulaması (Mobil Cihazlar / Safari / Android İçin)
+app.use('/app', express.static(path.join(__dirname, '../app/src/main/assets'), {
+    setHeaders: (res, filePath) => {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+        if (filePath.endsWith('.css')) res.setHeader('Content-Type', 'text/css; charset=utf-8');
+        else if (filePath.endsWith('.js')) res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    }
+}));
+
+// Yönetici Paneli
 app.use(express.static(path.join(__dirname, 'public'), {
     index: false,
     etag: false,
     lastModified: false,
     setHeaders: (res, filePath) => {
-        // Geliştirme: Tarayıcı önbelleğini devre dışı bırak
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
@@ -1129,7 +1131,9 @@ app.use(express.static(path.join(__dirname, 'public'), {
     }
 }));
 
-app.get('/', (req, res) => res.redirect('/login.html'));
+app.get('/app', (req, res) => res.sendFile(path.join(__dirname, '../app/src/main/assets/index.html')));
+app.get('/admin', (req, res) => res.redirect('/login.html'));
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, '../app/src/main/assets/index.html')));
 
 async function initDb() {
     try {
