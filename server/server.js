@@ -1105,16 +1105,7 @@ setInterval(enforceRetention, 24 * 60 * 60 * 1000);
 
 /* ---------------- Statik dosyalar ---------------- */
 
-// İşçi Mobil Web Uygulaması (Mobil Cihazlar / Safari / Android İçin)
-app.use('/app', express.static(path.join(__dirname, '../app/src/main/assets'), {
-    setHeaders: (res, filePath) => {
-        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
-        if (filePath.endsWith('.css')) res.setHeader('Content-Type', 'text/css; charset=utf-8');
-        else if (filePath.endsWith('.js')) res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-    }
-}));
-
-// Yönetici Paneli
+// Yönetici Paneli Dosyaları (login.html, admin.html, admin.js vb.)
 app.use(express.static(path.join(__dirname, 'public'), {
     index: false,
     etag: false,
@@ -1128,6 +1119,25 @@ app.use(express.static(path.join(__dirname, 'public'), {
         } else if (filePath.endsWith('.js')) {
             res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
         }
+    }
+}));
+
+// Mobil İşçi Arayüzü Dosyaları (app.js, consent.js, config.js, vendor/ vb.)
+app.use(express.static(path.join(__dirname, '../app/src/main/assets'), {
+    index: false,
+    setHeaders: (res, filePath) => {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+        if (filePath.endsWith('.css')) res.setHeader('Content-Type', 'text/css; charset=utf-8');
+        else if (filePath.endsWith('.js')) res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    }
+}));
+
+// İşçi Mobil Web Uygulaması (/app alt yolu)
+app.use('/app', express.static(path.join(__dirname, '../app/src/main/assets'), {
+    setHeaders: (res, filePath) => {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+        if (filePath.endsWith('.css')) res.setHeader('Content-Type', 'text/css; charset=utf-8');
+        else if (filePath.endsWith('.js')) res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
     }
 }));
 
