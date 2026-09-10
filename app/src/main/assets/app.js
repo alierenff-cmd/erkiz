@@ -172,6 +172,8 @@
                 mode === 'in' ? 'Giriş — saha QR kodunu okutun'
                               : 'Çıkış — saha QR kodunu okutun';
         }
+        el('scanner-hint').textContent = 'QR kodu çerçevenin içine hizalayın';
+        el('scanner-hint').style.color = '#fff';
         show('scanner');
         setStatus('');
 
@@ -199,27 +201,15 @@
 
             scanning = true;
 
-            // Arka kamerayi belirle: tek anahtarli nesne veya kamera ID'si (Html5Qrcode sarti)
-            let targetCamera = { facingMode: "environment" };
-            try {
-                const cameras = await Html5Qrcode.getCameras();
-                if (cameras && cameras.length > 0) {
-                    const backCam = cameras.find(c => /back|rear|environment|arka/i.test(c.label));
-                    targetCamera = backCam ? backCam.id : cameras[cameras.length - 1].id;
-                }
-            } catch (camErr) {
-                console.warn('getCameras uyari, varsayilan kullaniliyor:', camErr);
-            }
-
             try {
                 await scanner.start(
-                    targetCamera,
+                    { facingMode: "environment" },
                     qrConfig,
                     onScanSuccess,
                     () => { /* her karede tetiklenir, sessiz gecilir */ }
                 );
             } catch (envErr) {
-                console.warn('Hedef kamera acilamadi, alternatif deneniyor:', envErr);
+                console.warn('Arka kamera açılamadı, alternatif ön kamera deneniyor:', envErr);
                 await scanner.start(
                     { facingMode: "user" },
                     qrConfig,
@@ -229,9 +219,11 @@
             }
         } catch (err) {
             console.error('Kamera baslatma hatasi:', err);
-            await stopScanner();
-            show('form');
-            setStatus('Kamera baslatilamadi: ' + (err.message || 'Izinleri kontrol edin.'), 'error');
+            scanning = false;
+            if (el('scanner-hint')) {
+                el('scanner-hint').innerHTML = '⚠️ Kamera açılamadı: <br><small>' + (err.message || err) + '</small><br>Aşağıdaki <b>"Kodu Elle Gir"</b> butonunu kullanabilirsiniz.';
+                el('scanner-hint').style.color = '#ffbaba';
+            }
         }
     }
 
