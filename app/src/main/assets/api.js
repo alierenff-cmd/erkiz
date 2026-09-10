@@ -8,19 +8,61 @@
 const Api = (function () {
     'use strict';
 
-    // Eğer web tarayıcısı üzerinden HTTP/HTTPS ile erişiliyorsa (localhost, yerel ağ IP'si veya domain),
-    // her zaman doğrudan mevcut origin'i kullan (örn: http://localhost:3000).
-    // Yalnızca Android WebView yerel paketinde (appassets.androidplatform.net veya file://) config IP'sine başvur.
-    let BASE = '';
-    const locOrigin = (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : '';
-    const isLocalWeb = locOrigin && (locOrigin.startsWith('http://') || locOrigin.startsWith('https://')) && !locOrigin.includes('appassets.androidplatform.net');
+    function getBaseUrl() {
+        try {
+            const custom = localStorage.getItem('erkiz_server_url');
+            if (custom && custom.trim().startsWith('http')) {
+                return custom.trim().replace(/\/+$/, '');
+            }
+        } catch(e) {}
 
-    if (isLocalWeb) {
-        BASE = locOrigin;
-    } else if (window.ErkizConfig && window.ErkizConfig.apiBase && window.ErkizConfig.apiBase.length > 5) {
-        BASE = window.ErkizConfig.apiBase;
-    } else {
-        BASE = 'http://10.15.2.64:3000';
+        const locOrigin = (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : '';
+        const isLocalWeb = locOrigin && (locOrigin.startsWith('http://') || locOrigin.startsWith('https://')) && !locOrigin.includes('appassets.androidplatform.net');
+
+        if (isLocalWeb) {
+            return locOrigin;
+        }
+
+        if (window.ErkizConfig && window.ErkizConfig.apiBase && window.ErkizConfig.apiBase.length > 5) {
+            return window.ErkizConfig.apiBase.trim().replace(/\/+$/, '');
+        }
+
+        return 'http://10.15.2.64:3000';
+    }
+
+    function setServerUrl(newUrl) {
+        try {
+            if (!newUrl || !newUrl.trim()) {
+                localStorage.removeItem('erkiz_server_url');
+            } else {
+                let clean = newUrl.trim().replace(/\/+$/, '');
+                if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+                    clean = 'http://' + clean;
+                }
+                localStorage.setItem('erkiz_server_url', clean);
+            }
+        } catch(e) {}
+        token = null;
+        tokenExpiry = 0;
+    }
+
+    async function fetchWithTimeout(url, options = {}, timeoutMs = 6000) {
+        if (typeof AbortController === 'undefined') {
+            return await fetch(url, options);
+        }
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const res = await fetch(url, { ...options, signal: controller.signal });
+            clearTimeout(timer);
+            return res;
+        } catch (err) {
+            clearTimeout(timer);
+            if (err.name === 'AbortError') {
+                throw new Error('Bağlantı zaman aşımı: Sunucuya ulaşılamadı (' + url + ')');
+            }
+            throw err;
+        }
     }
 
     let token = null;
@@ -29,9 +71,10 @@ const Api = (function () {
     async function ensureToken() {
         if (token && Date.now() < tokenExpiry - 30000) return token;
 
+        const base = getBaseUrl();
         let res;
         try {
-            res = await fetch(BASE + '/api/device/register', {
+            res = await fetchWithTimeout(base + '/api/device/register', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -39,9 +82,9 @@ const Api = (function () {
                     platform: 'android',
                     consent_version: Consent.VERSION
                 })
-            });
+            }, 6000);
         } catch (netErr) {
-            throw new Error('Sunucuya erişilemedi (' + BASE + '). İnternet/Wi-Fi bağlantınızı veya sunucuyu kontrol edin.');
+            throw new Error('Sunucuya erişilemedi (' + base + '). İnternet/Wi-Fi bağlantınızı veya sunucuyu kontrol edin.');
         }
 
         if (!res.ok) {
@@ -60,14 +103,15 @@ const Api = (function () {
     }
 
     async function sendRequest(path, payload, authToken) {
-        return await fetch(BASE + path, {
+        const base = getBaseUrl();
+        return await fetchWithTimeout(base + path, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer ' + authToken
             },
             body: JSON.stringify(payload)
-        });
+        }, 8000);
     }
 
     async function post(path, payload) {
@@ -88,20 +132,21 @@ const Api = (function () {
     }
 
     async function get(path) {
+        const base = getBaseUrl();
         try {
-            const res = await fetch(BASE + path, {
+            const res = await fetchWithTimeout(base + path, {
                 method: 'GET',
                 headers: {
                     'Accept': 'application/json'
                 }
-            });
+            }, 6000);
             let body = [];
             try { body = await res.json(); } catch (e) {}
             return { ok: res.ok, status: res.status, body: body };
         } catch (e) {
-            return { ok: false, status: 0, body: null };
+            return { ok: false, status: 0, body: null, error: e.message };
         }
     }
 
-    return { post: post, get: get, base: BASE };
+    return { post, get, base: getBaseUrl, setServerUrl, getBaseUrl };
 })();

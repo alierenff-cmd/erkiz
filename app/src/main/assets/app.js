@@ -350,9 +350,14 @@
     async function loadProjects() {
         const select = el('project');
         if (!select) return;
+        select.innerHTML = '<option value="">-- Yükleniyor... --</option>';
+
+        let errBanner = el('project-network-banner');
+        if (errBanner) errBanner.remove();
+
         try {
             const res = await Api.get('/api/projects');
-            if (res.ok && Array.isArray(res.body)) {
+            if (res.ok && Array.isArray(res.body) && res.body.length > 0) {
                 select.innerHTML = '<option value="">-- Lütfen Seçin --</option>';
                 res.body.forEach(p => {
                     const opt = document.createElement('option');
@@ -360,11 +365,50 @@
                     opt.textContent = `${p.project_code} - ${p.project_name}`;
                     select.appendChild(opt);
                 });
+            } else if (res.ok && Array.isArray(res.body) && res.body.length === 0) {
+                select.innerHTML = '<option value="">-- Kayıtlı Proje Bulunamadı --</option>';
             } else {
-                select.innerHTML = '<option value="">-- Projeler Yüklenemedi --</option>';
+                showProjectError(select, res.error);
             }
         } catch (e) {
-            select.innerHTML = '<option value="">-- Sunucu Hatası --</option>';
+            showProjectError(select, e.message);
+        }
+    }
+
+    function showProjectError(select, detail) {
+        select.innerHTML = '<option value="">-- Bağlantı Hatası (Dokunun) --</option>';
+
+        const parent = select.parentElement;
+        if (parent && !el('project-network-banner')) {
+            const banner = document.createElement('div');
+            banner.id = 'project-network-banner';
+            banner.style.cssText = 'font-size:0.78rem; color:#d9534f; margin-top:5px; line-height:1.4; background:rgba(217,83,79,0.08); padding:6px 8px; border-radius:6px; border:1px solid rgba(217,83,79,0.2);';
+            const currentBase = Api.base();
+            banner.innerHTML = `⚠️ Sunucuya bağlanılamadı: <strong>${currentBase}</strong><br>` +
+                `<div style="margin-top:4px; display:flex; gap:10px;">` +
+                `<a href="#" id="link-retry-projects" style="color:#007AFF; font-weight:600; text-decoration:underline;">🔄 Tekrar Dene</a>` +
+                `<a href="#" id="link-change-server" style="color:#007AFF; font-weight:600; text-decoration:underline;">⚙️ Sunucu IP Değiştir</a>` +
+                `</div>`;
+            parent.appendChild(banner);
+
+            const retryLink = el('link-retry-projects');
+            if (retryLink) retryLink.addEventListener('click', (e) => { e.preventDefault(); loadProjects(); });
+
+            const changeLink = el('link-change-server');
+            if (changeLink) changeLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                promptChangeServer();
+            });
+        }
+    }
+
+    function promptChangeServer() {
+        const current = Api.base();
+        const entered = prompt('Sunucu Adresini Giriniz\n(Örn: http://10.15.2.64:3000 veya https://...):', current);
+        if (entered !== null && entered.trim()) {
+            Api.setServerUrl(entered.trim());
+            alert('Sunucu adresi güncellendi: ' + Api.base());
+            loadProjects();
         }
     }
 
@@ -406,6 +450,7 @@
             Consent.save(true, true);
             show('form');
             renderConsentStatus();
+            loadProjects();
         });
 
         el('btn-checkin').addEventListener('click', () => startScanner('in'));
@@ -425,6 +470,7 @@
 
         el('btn-manage-consent').addEventListener('click', function () {
             el('setting-location').checked = Consent.allowsLocation();
+            if (el('setting-server-url')) el('setting-server-url').value = Api.base();
             show('settings');
         });
 
@@ -457,6 +503,25 @@
                 });
             }
         });
+
+        if (el('project')) {
+            el('project').addEventListener('click', function () {
+                if (el('project').options.length <= 1 && !el('project').value) {
+                    loadProjects();
+                }
+            });
+        }
+
+        if (el('btn-save-server')) {
+            el('btn-save-server').addEventListener('click', function () {
+                const input = el('setting-server-url');
+                if (input && input.value.trim()) {
+                    Api.setServerUrl(input.value.trim());
+                    alert('Sunucu adresi kaydedildi: ' + Api.base());
+                    loadProjects();
+                }
+            });
+        }
 
         bootstrap();
     });
