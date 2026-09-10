@@ -779,6 +779,114 @@
         }
     }
 
+    /* ---------------- Proje Yönetimi ---------------- */
+
+    let projectsCache = [];
+
+    async function loadAdminProjects() {
+        try {
+            console.log('[Erkiz] Loading projects...');
+            const res = await fetch(apiBase + '/api/admin/projects', { credentials: 'include' });
+            if (res.status === 401 || res.status === 403) {
+                window.location.replace('login.html');
+                return;
+            }
+            if (!res.ok) {
+                console.error('[Erkiz] Projects error:', res.status);
+                return;
+            }
+            projectsCache = await res.json();
+            console.log('[Erkiz] Projects loaded:', projectsCache.length, 'adet');
+            renderProjectsList(projectsCache);
+        } catch (e) {
+            console.error('[Erkiz] Projects exception:', e);
+        }
+    }
+
+    function renderProjectsList(projects) {
+        const list = el('projects-list');
+        if (!list) return;
+        list.innerHTML = '';
+        if (!projects || !projects.length) {
+            list.innerHTML = '<li style="color: var(--ios-gray); font-style: italic;">Henüz kayıtlı proje yok.</li>';
+            return;
+        }
+
+        projects.forEach(p => {
+            const li = document.createElement('li');
+            li.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding: 6px 0; border-bottom: 0.5px solid #eee;';
+
+            const info = document.createElement('span');
+            info.innerHTML = `🏗️ <strong>${p.project_code}</strong> - ${p.project_name}`;
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'btn-delete';
+            delBtn.textContent = 'Sil';
+            delBtn.style.padding = '4px 8px';
+            delBtn.addEventListener('click', () => deleteProject(p.id));
+
+            li.appendChild(info);
+            li.appendChild(delBtn);
+            list.appendChild(li);
+        });
+    }
+
+    async function addProject() {
+        const codeInput = el('new-project-code');
+        const nameInput = el('new-project-name');
+        if (!codeInput || !nameInput) return;
+
+        const code = codeInput.value.trim();
+        const name = nameInput.value.trim();
+
+        if (!code || !name) {
+            alert('Lütfen Proje Kodu ve Proje Adı alanlarını doldurunuz.');
+            return;
+        }
+
+        try {
+            const res = await fetch(apiBase + '/api/admin/projects', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': getCsrfToken()
+                },
+                body: JSON.stringify({ project_code: code, project_name: name })
+            });
+
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok || !body.ok) {
+                alert('Hata: ' + (body.error || 'Proje eklenemedi.'));
+                return;
+            }
+
+            codeInput.value = '';
+            nameInput.value = '';
+            loadAdminProjects();
+        } catch (e) {
+            alert('Bağlantı hatası.');
+        }
+    }
+
+    async function deleteProject(id) {
+        if (!confirm('Bu projeyi silmek istediğinize emin misiniz?')) return;
+        try {
+            const res = await fetch(apiBase + '/api/admin/projects/' + id, {
+                method: 'DELETE',
+                credentials: 'include',
+                headers: { 'X-CSRF-Token': getCsrfToken() }
+            });
+            if (res.ok) {
+                loadAdminProjects();
+            } else {
+                alert('Proje silinemedi.');
+            }
+        } catch (e) {
+            alert('Bağlantı hatası.');
+        }
+    }
+
     function handleWorkerFileSelect(e) {
         const file = e.target.files[0];
         if (!file) return;

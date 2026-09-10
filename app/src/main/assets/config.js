@@ -8,5 +8,5 @@
  * Kendi domaininizi ve gecerli TLS sertifikanizi kullanin.
  */
 window.ErkizConfig = {
-    apiBase: 'http://10.15.2.50:3000'
+    apiBase: 'http://10.15.2.64:3000'
 };

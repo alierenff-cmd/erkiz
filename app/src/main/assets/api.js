@@ -8,10 +8,20 @@
 const Api = (function () {
     'use strict';
 
-    // config.js build sirasinda uretilir veya varsayilan IP kullanilir.
-    const BASE = (window.ErkizConfig && window.ErkizConfig.apiBase && window.ErkizConfig.apiBase.length > 5)
-        ? window.ErkizConfig.apiBase
-        : 'http://10.15.2.50:3000';
+    // Eğer web tarayıcısı üzerinden HTTP/HTTPS ile erişiliyorsa (localhost, yerel ağ IP'si veya domain),
+    // her zaman doğrudan mevcut origin'i kullan (örn: http://localhost:3000).
+    // Yalnızca Android WebView yerel paketinde (appassets.androidplatform.net veya file://) config IP'sine başvur.
+    let BASE = '';
+    const locOrigin = (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : '';
+    const isLocalWeb = locOrigin && (locOrigin.startsWith('http://') || locOrigin.startsWith('https://')) && !locOrigin.includes('appassets.androidplatform.net');
+
+    if (isLocalWeb) {
+        BASE = locOrigin;
+    } else if (window.ErkizConfig && window.ErkizConfig.apiBase && window.ErkizConfig.apiBase.length > 5) {
+        BASE = window.ErkizConfig.apiBase;
+    } else {
+        BASE = 'http://10.15.2.64:3000';
+    }
 
     let token = null;
     let tokenExpiry = 0;
