@@ -17,7 +17,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Erkiz İşçi">
     <meta name="mobile-web-app-capable" content="yes">
-    <link rel="stylesheet" href="style.css?v=20260910-3">
+    <link rel="stylesheet" href="style.css?v=20260910-4">
 </head>
 <body>
 
@@ -150,7 +150,10 @@
     <div id="reader"></div>
     <div class="scanner-foot">
         <div id="scanner-hint" class="hint">QR kodu çerçevenin içine hizalayın</div>
-        <button id="btn-cancel-scan" class="btn btn-cancel">Vazgeç</button>
+        <div style="display: flex; gap: 10px; justify-content: center; width: 100%;">
+            <button id="btn-cancel-scan" class="btn btn-cancel" style="flex: 1; margin: 0;">Vazgeç</button>
+            <button id="btn-manual-qr" class="btn" style="flex: 1; margin: 0; background: rgba(255,255,255,0.25); color: #fff; border: 1px solid rgba(255,255,255,0.4);">Kodu Elle Gir</button>
+        </div>
     </div>
 </section>
 
@@ -186,10 +189,10 @@
     <div class="version" id="version-label"></div>
 </section>
 
-<script src="vendor/html5-qrcode.min.js?v=20260910-3"></script>
-<script src="config.js?v=20260910-3"></script>
-<script src="consent.js?v=20260910-3"></script>
-<script src="api.js?v=20260910-3"></script>
-<script src="app.js?v=20260910-3"></script>
+<script src="vendor/html5-qrcode.min.js?v=20260910-4"></script>
+<script src="config.js?v=20260910-4"></script>
+<script src="consent.js?v=20260910-4"></script>
+<script src="api.js?v=20260910-4"></script>
+<script src="app.js?v=20260910-4"></script>
 </body>
 </html>

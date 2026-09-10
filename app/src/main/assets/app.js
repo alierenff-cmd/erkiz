@@ -197,36 +197,41 @@
                 }
             };
 
-            // ÖNEMLİ: aspectRatio: 1.0 ASLA zorlanmamalıdır (telefon kamera sürücülerini çökertir)
-            // Çözünürlüğü makul bir seviyede (720p/1080p) tutarak RAM patlaması engellenir.
-            const cameraConstraints = {
-                facingMode: { ideal: "environment" },
-                width: { ideal: 1280, max: 1920 },
-                height: { ideal: 720, max: 1080 }
-            };
-
             scanning = true;
+
+            // Arka kamerayi belirle: tek anahtarli nesne veya kamera ID'si (Html5Qrcode sarti)
+            let targetCamera = { facingMode: "environment" };
+            try {
+                const cameras = await Html5Qrcode.getCameras();
+                if (cameras && cameras.length > 0) {
+                    const backCam = cameras.find(c => /back|rear|environment|arka/i.test(c.label));
+                    targetCamera = backCam ? backCam.id : cameras[cameras.length - 1].id;
+                }
+            } catch (camErr) {
+                console.warn('getCameras uyari, varsayilan kullaniliyor:', camErr);
+            }
+
             try {
                 await scanner.start(
-                    cameraConstraints,
+                    targetCamera,
                     qrConfig,
                     onScanSuccess,
                     () => { /* her karede tetiklenir, sessiz gecilir */ }
                 );
             } catch (envErr) {
-                console.warn('Arka kamera açılamadı, alternatif kamera deneniyor:', envErr);
+                console.warn('Hedef kamera acilamadi, alternatif deneniyor:', envErr);
                 await scanner.start(
-                    { facingMode: 'user' },
+                    { facingMode: "user" },
                     qrConfig,
                     onScanSuccess,
                     () => {}
                 );
             }
         } catch (err) {
-            console.error('Kamera başlatma hatası:', err);
+            console.error('Kamera baslatma hatasi:', err);
             await stopScanner();
             show('form');
-            setStatus('Kamera başlatılamadı: ' + (err.message || 'İzinleri kontrol edin.'), 'error');
+            setStatus('Kamera baslatilamadi: ' + (err.message || 'Izinleri kontrol edin.'), 'error');
         }
     }
 
@@ -511,6 +516,15 @@
             await stopScanner();
             show('form');
         });
+
+        if (el('btn-manual-qr')) {
+            el('btn-manual-qr').addEventListener('click', async function () {
+                const code = prompt('Saha QR kodunu giriniz (örnek: PRJ-156 veya ERKIZ):');
+                if (code && code.trim()) {
+                    await onScanSuccess(code.trim());
+                }
+            });
+        }
 
         el('btn-manage-consent').addEventListener('click', function () {
             el('setting-location').checked = Consent.allowsLocation();
