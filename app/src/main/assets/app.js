@@ -249,15 +249,33 @@
     async function onScanSuccess(decodedText) {
         if (busy) return;
         busy = true;
+
         try {
-            await stopScanner();
+            // 1. Taramayı dondur (pause) - Kesinlikle hemen stop() ve clear() çağırma,
+            // çünkü video karesi işlenirken donanımı aniden sökmek Chromium'u çökertir (SIGSEGV)!
+            try {
+                if (scanner) {
+                    scanner.pause(true);
+                }
+            } catch (pErr) {
+                console.warn('Scanner pause uyari:', pErr);
+            }
+
+            // 2. Ekranı hemen form görünümüne al
             show('form');
+            setStatus('QR kod okundu, kayıt hazırlanıyor…', 'info');
+
+            // 3. Sunucuya gönderimi tamamla
             await submitAction(decodedText);
         } catch (err) {
             console.error('Scan success error:', err);
             setStatus('İşlem hatası: ' + (err.message || err), 'error');
         } finally {
             busy = false;
+            // 4. Kamerayı UI ve işlem bittikten sonra güvenli bir gecikmeyle kapat
+            setTimeout(async () => {
+                await stopScanner();
+            }, 1200);
         }
     }
 
@@ -268,7 +286,12 @@
         if (!form) return;
 
         setStatus('Konum ve kayıt hazırlanıyor…', 'info');
-        const location = await captureLocation();
+        let location = null;
+        try {
+            location = await captureLocation();
+        } catch (locErr) {
+            console.warn('Konum alma atlandı:', locErr);
+        }
 
         if (Consent.allowsLocation() && !location) {
             setStatus('Konum alınamadı — kayıt konumsuz gönderiliyor…', 'warn');
