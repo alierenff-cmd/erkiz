@@ -176,37 +176,75 @@
         setStatus('');
 
         try {
-            if (!scanner) scanner = new Html5Qrcode('reader', { verbose: false });
+            await stopScanner();
+
+            // DOM'un render edilmesi ve boyutların kesinleşmesi için kısa bekleme
+            await new Promise(r => setTimeout(r, 150));
+
+            scanner = new Html5Qrcode('reader', {
+                verbose: false,
+                experimentalFeatures: {
+                    useBarCodeDetectorIfSupported: true
+                }
+            });
+
+            const qrConfig = {
+                fps: 10,
+                qrbox: function(viewfinderWidth, viewfinderHeight) {
+                    const minEdge = Math.min(viewfinderWidth || 300, viewfinderHeight || 300);
+                    const size = Math.max(160, Math.floor(minEdge * 0.7));
+                    return { width: size, height: size };
+                }
+            };
+
+            // ÖNEMLİ: aspectRatio: 1.0 ASLA zorlanmamalıdır (telefon kamera sürücülerini çökertir)
+            // Çözünürlüğü makul bir seviyede (720p/1080p) tutarak RAM patlaması engellenir.
+            const cameraConstraints = {
+                facingMode: { ideal: "environment" },
+                width: { ideal: 1280, max: 1920 },
+                height: { ideal: 720, max: 1080 }
+            };
+
             scanning = true;
             try {
                 await scanner.start(
-                    { facingMode: 'environment' },
-                    { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 },
+                    cameraConstraints,
+                    qrConfig,
                     onScanSuccess,
                     () => { /* her karede tetiklenir, sessiz gecilir */ }
                 );
             } catch (envErr) {
-                // Arka kamera baslatilamazsa varsayilan/ön kameraya gec
+                console.warn('Arka kamera açılamadı, alternatif kamera deneniyor:', envErr);
                 await scanner.start(
                     { facingMode: 'user' },
-                    { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1.0 },
+                    qrConfig,
                     onScanSuccess,
                     () => {}
                 );
             }
         } catch (err) {
-            scanning = false;
+            console.error('Kamera başlatma hatası:', err);
+            await stopScanner();
             show('form');
             setStatus('Kamera başlatılamadı: ' + (err.message || 'İzinleri kontrol edin.'), 'error');
         }
     }
 
     async function stopScanner() {
-        if (scanner && scanning) {
+        if (scanner) {
             try {
-                await scanner.stop();
+                if (scanning) {
+                    await scanner.stop();
+                }
+            } catch (e) {
+                console.warn('Scanner stop warn:', e);
+            }
+            try {
                 scanner.clear();
-            } catch (e) { /* zaten durmus olabilir */ }
+            } catch (e) {
+                console.warn('Scanner clear warn:', e);
+            }
+            scanner = null;
         }
         scanning = false;
     }
@@ -214,10 +252,16 @@
     async function onScanSuccess(decodedText) {
         if (busy) return;
         busy = true;
-        await stopScanner();
-        show('form');
-        await submitAction(decodedText);
-        busy = false;
+        try {
+            await stopScanner();
+            show('form');
+            await submitAction(decodedText);
+        } catch (err) {
+            console.error('Scan success error:', err);
+            setStatus('İşlem hatası: ' + (err.message || err), 'error');
+        } finally {
+            busy = false;
+        }
     }
 
     /* ---------------- Sunucuya gonderim ---------------- */

@@ -262,14 +262,39 @@ input::placeholder { color: var(--ios-text-tertiary); }
     z-index: 1000;
 }
 
+#reader {
+    width: 100%;
+    height: 100%;
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: #000;
+}
+
+#reader video {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+}
+
+#reader canvas {
+    position: absolute !important;
+}
+
 .scanner-head {
     padding: 20px;
     text-align: center;
     color: #fff;
     font-weight: 600;
     position: absolute;
-    top: 0; width: 100%;
-    background: linear-gradient(to bottom, rgba(0,0,0,0.5), transparent);
+    top: 0;
+    width: 100%;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
+    z-index: 1010;
 }
 
 .scanner-foot {
@@ -278,6 +303,7 @@ input::placeholder { color: var(--ios-text-tertiary); }
     width: 100%;
     padding: 0 40px;
     text-align: center;
+    z-index: 1010;
 }
 
 .hint { color: #fff; margin-bottom: 20px; font-size: 0.9rem; }
