@@ -5,7 +5,6 @@ const mysql = require('mysql2/promise');
 const crypto = require('crypto');
 require('dotenv').config();
 
-const pepper = process.env.TC_PEPPER || 'erkiz_takip_tc_pepper_2026_secure';
 const keyHex = process.env.TC_ENCRYPTION_KEY;
 
 if (!keyHex || keyHex.length !== 64) {
@@ -13,18 +12,18 @@ if (!keyHex || keyHex.length !== 64) {
     process.exit(1);
 }
 
-const encKey = Buffer.from(keyHex, 'hex');
-
 function hashTC(tc) {
-    return crypto.createHmac('sha256', pepper).update(String(tc).trim()).digest('hex');
+    return crypto.createHmac('sha256', process.env.TC_ENCRYPTION_KEY)
+                 .update(String(tc).trim()).digest('hex');
 }
 
 function encryptTC(tc) {
+    const key = crypto.createHash('sha256')
+                      .update(process.env.TC_ENCRYPTION_KEY).digest();
     const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', encKey, iv);
-    const encrypted = Buffer.concat([cipher.update(String(tc).trim(), 'utf8'), cipher.final()]);
-    const tag = cipher.getAuthTag();
-    return Buffer.concat([iv, tag, encrypted]);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const enc = Buffer.concat([cipher.update(String(tc).trim(), 'utf8'), cipher.final()]);
+    return Buffer.concat([iv, cipher.getAuthTag(), enc]).toString('base64');
 }
 
 function excelSerialToYYYYMMDD(serial) {
@@ -42,11 +41,17 @@ function excelSerialToYYYYMMDD(serial) {
 }
 
 async function reseed() {
-    const file = 'C:\\Users\\ali_e\\OneDrive\\Documents\\T.C PERSONEL DOĞUM TARİHİ.xlsx';
-    if (!fs.existsSync(file)) {
-        console.error('Excel file not found at:', file);
+    const possiblePaths = [
+        path.join(process.env.USERPROFILE || 'C:\\Users\\Ali eren', 'Downloads', 'T.C PERSONEL DOĞUM TARİHİ.xlsx'),
+        'C:\\Users\\Ali eren\\Downloads\\T.C PERSONEL DOĞUM TARİHİ.xlsx',
+        'C:\\Users\\ali_e\\OneDrive\\Documents\\T.C PERSONEL DOĞUM TARİHİ.xlsx'
+    ];
+    let file = possiblePaths.find(p => fs.existsSync(p));
+    if (!file) {
+        console.error('Excel file not found in possible locations:', possiblePaths);
         return;
     }
+    console.log('Using Excel file:', file);
 
     const tempZip = path.join(__dirname, 'temp_reseed.zip');
     const tmpDir = path.join(__dirname, 'scratch_reseed');

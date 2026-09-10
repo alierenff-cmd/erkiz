@@ -664,6 +664,11 @@
         const list = el('workers-list');
         const badge = el('workers-count-badge');
 
+        const filterSelect = el('filter-workers');
+        if (filterSelect && filterSelect.options && filterSelect.options[0]) {
+            filterSelect.options[0].textContent = `👥 Tüm Kayıtlı İşçiler (${workersCache.length} İşçi)`;
+        }
+
         const bdayCount = workersCache.filter(w => w.is_birthday_today || w.is_birthday_this_week).length;
         if (badge) {
             if (filterMode === 'bday') {
