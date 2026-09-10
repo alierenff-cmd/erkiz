@@ -7,12 +7,14 @@ CREATE DATABASE IF NOT EXISTS erkiz_takip
 USE erkiz_takip;
 
 CREATE TABLE IF NOT EXISTS devices (
-    device_id        VARCHAR(32)  NOT NULL PRIMARY KEY,
-    first_seen       DATETIME     NOT NULL,
-    last_seen        DATETIME     NOT NULL,
-    consent_version  SMALLINT     NOT NULL DEFAULT 1,
-    blocked          BOOLEAN      NOT NULL DEFAULT FALSE,
-    note             VARCHAR(255) NULL
+    device_id          VARCHAR(32)  NOT NULL PRIMARY KEY,
+    first_seen         DATETIME     NOT NULL,
+    last_seen          DATETIME     NOT NULL,
+    consent_version    SMALLINT     NOT NULL DEFAULT 1,
+    blocked            BOOLEAN      NOT NULL DEFAULT FALSE,
+    bound_tc_hash      CHAR(64)     NULL,
+    bound_worker_name  VARCHAR(100) NULL,
+    note               VARCHAR(255) NULL
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS attendance_logs (
@@ -31,6 +33,8 @@ CREATE TABLE IF NOT EXISTS attendance_logs (
     check_in_time       DATETIME     NOT NULL,
     check_out_time      DATETIME     NULL,
     duration_minutes    INT          NULL,
+    auto_closed         BOOLEAN      NOT NULL DEFAULT FALSE,
+    auto_close_reason   VARCHAR(100) NULL,
 
     -- Konum (riza varsa dolar, 90 gun sonra NULL'lanir)
     in_latitude         DECIMAL(9,6) NULL,

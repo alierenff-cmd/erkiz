@@ -290,8 +290,52 @@ async function handleAction(req, res, mode) {
         });
     }
 
+    // 1. Cihaz Kilidi Kontrolü (1 Telefon = 1 İşçi Kuralı / Çavuş & Sahtecilik Önleme)
+    const [devRows] = await pool.execute(
+        `SELECT bound_tc_hash, bound_worker_name FROM devices WHERE device_id = ?`,
+        [req.device.did]
+    );
+
+    if (devRows && devRows.length > 0) {
+        if (!devRows[0].bound_tc_hash) {
+            // İlk kez bir işçi bu telefondan işlem yapıyor -> Cihazı bu personele bağla
+            const workerFullName = `${first} ${last}`;
+            await pool.execute(
+                `UPDATE devices SET bound_tc_hash = ?, bound_worker_name = ? WHERE device_id = ?`,
+                [tcHash, workerFullName, req.device.did]
+            );
+        } else if (devRows[0].bound_tc_hash !== tcHash) {
+            // Cihaz başka bir personele kilitli!
+            const lockedName = devRows[0].bound_worker_name || 'başka bir personele';
+            return res.status(403).json({
+                message: `Bu telefon ${lockedName} adına kilitlenmiştir. Tek bir telefondan birden fazla işçi giriş-çıkış yapamaz!`
+            });
+        }
+    }
+
     if (mode === 'in') {
-        // 1. Kullanıcının zaten açık bir giriş kaydı var mı?
+        // 2. Gece Otomatik Kapanış: Dünden veya daha önceden açık kalan bir mesai kaydı varsa OTOMATİK KAPAT
+        await pool.execute(
+            `UPDATE attendance_logs
+             SET check_out_time = CONCAT(DATE(check_in_time), ' 18:00:00'),
+                 duration_minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_time, CONCAT(DATE(check_in_time), ' 18:00:00'))),
+                 auto_closed = TRUE,
+                 auto_close_reason = 'Dünden Açık Kalan Mesai Sistem Tarafından Kapatıldı'
+             WHERE tc_hash = ? AND check_out_time IS NULL AND DATE(check_in_time) < CURDATE()`,
+            [tcHash]
+        );
+
+        await pool.execute(
+            `UPDATE attendance_logs
+             SET check_out_time = CONCAT(DATE(check_in_time), ' 18:00:00'),
+                 duration_minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_time, CONCAT(DATE(check_in_time), ' 18:00:00'))),
+                 auto_closed = TRUE,
+                 auto_close_reason = 'Dünden Açık Kalan Mesai Sistem Tarafından Kapatıldı'
+             WHERE device_id = ? AND check_out_time IS NULL AND DATE(check_in_time) < CURDATE()`,
+            [req.device.did]
+        );
+
+        // 3. Kullanıcının bugüne ait zaten açık bir giriş kaydı var mı?
         const [open] = await pool.execute(
             `SELECT id, activity, project FROM attendance_logs
              WHERE tc_hash = ? AND check_out_time IS NULL LIMIT 1`, [tcHash]);
@@ -314,7 +358,7 @@ async function handleAction(req, res, mode) {
             }
         }
 
-        // 2. Bu cihazda başka birinin açık giriş kaydı var mı? (1 cihazda 2 kişi engeli)
+        // 4. Bu cihazda başka birinin açık giriş kaydı var mı?
         const [deviceOpen] = await pool.execute(
             `SELECT id, first_name, last_name FROM attendance_logs
              WHERE device_id = ? AND check_out_time IS NULL LIMIT 1`, [req.device.did]);
@@ -785,6 +829,35 @@ app.put('/api/admin/qr-codes/:id/geofence', requireAdmin, async (req, res) => {
     }
 });
 
+/* ---------------- Cihaz ve Kilit Yönetimi (1 Telefon = 1 İşçi) ---------------- */
+
+app.get('/api/admin/devices', requireAdmin, async (req, res) => {
+    try {
+        const [rows] = await pool.execute(
+            `SELECT device_id, first_seen, last_seen, consent_version, blocked, note, bound_worker_name, bound_tc_hash
+             FROM devices ORDER BY last_seen DESC`
+        );
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/admin/devices/:deviceId/unbind', requireAdmin, async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        await pool.execute(
+            `UPDATE devices SET bound_tc_hash = NULL, bound_worker_name = NULL WHERE device_id = ?`,
+            [deviceId]
+        );
+        res.json({ ok: true, message: 'Cihaz kilidi başarıyla kaldırıldı.' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/* ---------------- Puantaj ve Giriş-Çıkış Kayıtları ---------------- */
+
 app.get('/api/logs', requireAdmin, async (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 500, 2000);
 
@@ -792,7 +865,8 @@ app.get('/api/logs', requireAdmin, async (req, res) => {
         `SELECT id, tc_encrypted, first_name, last_name, qr_data, project, activity,
                 check_in_time, check_out_time, duration_minutes,
                 in_latitude AS latitude, in_longitude AS longitude,
-                in_accuracy_m AS accuracy_m, location_consent, is_out_of_bounds
+                in_accuracy_m AS accuracy_m, location_consent, is_out_of_bounds,
+                auto_closed, auto_close_reason
          FROM attendance_logs
          ORDER BY check_in_time DESC
          LIMIT ?`, [String(limit)]);
@@ -809,7 +883,9 @@ app.get('/api/logs', requireAdmin, async (req, res) => {
 
 function decryptTC(payload) {
     try {
-        const raw = Buffer.from(payload, 'base64');
+        if (!payload) return '';
+        const base64Str = Buffer.isBuffer(payload) ? payload.toString('utf8') : String(payload);
+        const raw = Buffer.from(base64Str, 'base64');
         const key = crypto.createHash('sha256')
                           .update(process.env.TC_ENCRYPTION_KEY).digest();
         const decipher = crypto.createDecipheriv('aes-256-gcm', key, raw.subarray(0, 12));
@@ -1103,6 +1179,34 @@ async function enforceRetention() {
 
 setInterval(enforceRetention, 24 * 60 * 60 * 1000);
 
+/* ---------------- Gece Otomatik Mesai Kapanışı ---------------- */
+
+/**
+ * Akşam çıkış yapmayı unutan işçilerin açık mesailerini saat 18:00 itibarıyla
+ * otomatik kapatır ve ertesi sabah işe geldiklerinde kilitlenmelerini önler.
+ */
+async function autoCloseStaleAttendanceLogs() {
+    try {
+        const [res] = await pool.execute(
+            `UPDATE attendance_logs
+             SET check_out_time = CONCAT(DATE(check_in_time), ' 18:00:00'),
+                 duration_minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_time, CONCAT(DATE(check_in_time), ' 18:00:00'))),
+                 auto_closed = TRUE,
+                 auto_close_reason = 'Akşam Çıkış Unutuldu (Gece Otomatik Kapatıldı)'
+             WHERE check_out_time IS NULL
+               AND (DATE(check_in_time) < CURDATE() OR (HOUR(NOW()) >= 23 AND DATE(check_in_time) = CURDATE()))`
+        );
+        if (res.affectedRows > 0) {
+            console.log(`[OTO-KAPANIŞ] ${res.affectedRows} adet unutulmuş açık mesai 18:00 itibarıyla otomatik kapatıldı.`);
+        }
+    } catch (err) {
+        console.error('[OTO-KAPANIŞ] Hata:', err.message);
+    }
+}
+
+// Her 30 dakikada bir kontrol et
+setInterval(autoCloseStaleAttendanceLogs, 30 * 60 * 1000);
+
 /* ---------------- Statik dosyalar ---------------- */
 
 // Yönetici Paneli Dosyaları (login.html, admin.html, admin.js vb.)
@@ -1237,6 +1341,20 @@ async function initDb() {
             console.log("[DB] 'project' sütunu veritabanına otomatik eklendi.");
         }
 
+        // Cihaz Kilitleme (1 Telefon = 1 İşçi Kuralı)
+        const [devBoundCols] = await pool.execute("SHOW COLUMNS FROM devices LIKE 'bound_tc_hash'");
+        if (!devBoundCols || devBoundCols.length === 0) {
+            await pool.execute("ALTER TABLE devices ADD COLUMN bound_tc_hash CHAR(64) NULL, ADD COLUMN bound_worker_name VARCHAR(100) NULL");
+            console.log("[DB] 'bound_tc_hash' ve 'bound_worker_name' sütunları devices tablosuna eklendi.");
+        }
+
+        // Gece Otomatik Mesai Kapanış Sütunları
+        const [autoCloseCols] = await pool.execute("SHOW COLUMNS FROM attendance_logs LIKE 'auto_closed'");
+        if (!autoCloseCols || autoCloseCols.length === 0) {
+            await pool.execute("ALTER TABLE attendance_logs ADD COLUMN auto_closed BOOLEAN NOT NULL DEFAULT FALSE, ADD COLUMN auto_close_reason VARCHAR(100) NULL");
+            console.log("[DB] 'auto_closed' ve 'auto_close_reason' sütunları attendance_logs tablosuna eklendi.");
+        }
+
         await pool.execute(`
             CREATE TABLE IF NOT EXISTS workers (
                 id           INT AUTO_INCREMENT PRIMARY KEY,
@@ -1257,4 +1375,5 @@ app.listen(PORT, '0.0.0.0', async () => {
     console.log(`Erkiz Takip sunucusu :${PORT} portunda çalışıyor`);
     await initDb();
     enforceRetention();
+    await autoCloseStaleAttendanceLogs();
 });
