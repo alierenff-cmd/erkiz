@@ -65,6 +65,43 @@ if not errorlevel 1 (
         )
     )
 
+    rem Adi farkli olan MySQL veya MariaDB servislerini otomatik bul
+    if not defined STARTED (
+        for /f "tokens=2" %%S in ('sc query state^= all ^| findstr /r /i /c:"SERVICE_NAME: .*maria" /c:"SERVICE_NAME: .*mysql"') do (
+            if not defined STARTED (
+                net start "%%S" >nul 2>&1
+                sc query "%%S" | findstr /i "RUNNING" >nul
+                if not errorlevel 1 (
+                    echo       [OK] %%S servisi calisiyor.
+                    set "STARTED=1"
+                )
+            )
+        )
+    )
+
+    rem Servis yoksa MariaDB sunucusunu dogrudan baslat
+    if not defined STARTED (
+        for /d %%D in ("C:\Program Files\MariaDB *") do (
+            set "DBEXE="
+            if exist "%%D\bin\mysqld.exe" set "DBEXE=%%D\bin\mysqld.exe"
+            if exist "%%D\bin\mariadbd.exe" set "DBEXE=%%D\bin\mariadbd.exe"
+            if not defined STARTED if defined DBEXE (
+                echo       [BILGI] %%~nxD dogrudan baslatiliyor...
+                if exist "%%D\data\my.ini" (
+                    start "MariaDB" /min "!DBEXE!" "--defaults-file=%%D\data\my.ini" --console
+                ) else (
+                    start "MariaDB" /min "!DBEXE!" "--datadir=%%D\data" --console
+                )
+                timeout /t 8 >nul
+                netstat -ano | findstr :3306 >nul
+                if not errorlevel 1 (
+                    echo       [OK] MariaDB baslatildi.
+                    set "STARTED=1"
+                )
+            )
+        )
+    )
+
     if not defined STARTED (
         if exist "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysqld.exe" (
             echo       [BİLGİ] mysqld.exe doğrudan başlatılıyor...

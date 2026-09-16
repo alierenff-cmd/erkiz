@@ -20,7 +20,6 @@ sudo npm install -g pm2
 # Enable Firewall
 sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
-sudo ufw allow 3000/tcp
 sudo ufw allow 22/tcp
 sudo ufw --force enable
 

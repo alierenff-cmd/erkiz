@@ -10,7 +10,8 @@
 const Consent = (function () {
     'use strict';
 
-    const CONSENT_VERSION = 2;
+    // v3: konum rizasi istege bagli yapildi, mesai ici 15 dk konum aydinlatma metnine eklendi.
+    const CONSENT_VERSION = 3;
     const KEY = 'erkiz_consent_v' + CONSENT_VERSION;
     const DEVICE_KEY = 'erkiz_device_id';
 

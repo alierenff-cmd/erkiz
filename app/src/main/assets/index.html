@@ -17,7 +17,10 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Erkiz İşçi">
     <meta name="mobile-web-app-capable" content="yes">
-    <link rel="stylesheet" href="style.css?v=20260910-6">
+    <link rel="stylesheet" href="style.css?v=20260910-10">
+    <script>
+        try { if ('BarcodeDetector' in window) delete window.BarcodeDetector; } catch (e) {}
+    </script>
 </head>
 <body>
 
@@ -38,7 +41,7 @@
         • <strong>Kimlik Bilgileri:</strong> Ad, soyad, T.C. kimlik numarası, personel/sicil numarası, profil fotoğrafı ve/veya sistem rumuzu (ad-soyad baş harfleri).<br>
         • <strong>İletişim Bilgileri:</strong> Telefon numarası, kurumsal veya kişisel e-posta adresi.<br>
         • <strong>İstihdam ve Özlük Bilgileri:</strong> Bağlı olunan şantiye, alt yüklenici/taşeron bilgisi, görev/unvan, vardiya düzeni, puantaj verileri, çalışılan toplam gün sayısı, giriş-çıkış saatleri ve mesai süreleri.<br>
-        • <strong>Lokasyon ve Saha Verileri:</strong> QR kodun taratıldığı şantiye alanı, blok/bölüm bilgisi ve giriş-çıkış anındaki saha doğrulamasına esas zaman damgası.<br>
+        • <strong>Lokasyon ve Saha Verileri:</strong> QR kodun taratıldığı şantiye alanı, blok/bölüm bilgisi ve giriş-çıkış anındaki saha doğrulamasına esas zaman damgası. Ayrıca yalnızca ayrı açık rıza vermeniz halinde: giriş ve çıkış anındaki telefon konumunuz (GPS koordinatı ve doğruluk payı) ile açık mesainiz süresince saat 18:00'e kadar en fazla 15 dakikada bir alınan konum bilgisi. Konum verileri 90 gün sonra otomatik olarak silinir; 18:00 sonrasında ve mesai dışında konum alınmaz.<br>
         • <strong>İşlem Güvenliği ve Teknik Veriler:</strong> Uygulama giriş-çıkış logları, cihaz eşleşme bilgisi, ip adresi, işletim sistemi sürümü ve uygulama kullanım metrikleri.</p>
 
         <p><strong>2. KİŞİSEL VERİLERİNİZİN İŞLENME AMAÇLARI VE HUKUKİ SEBEBİ</strong><br>
@@ -68,7 +71,7 @@
             <input type="checkbox" id="consent-core">
         </label>
         <label class="check-row">
-            <span>İş mevzuatına uygunluğun sağlanması, işyeri kurallarına ilişkin ihlallerin tespit edilmesi, suistimallerin önlenmesi, tüm işlem kayıtlarının doğruluğunun sağlanması ve denetlenmesi için açık rıza hukuki işleme sebebine dayalı olarak kişisel verilerimin işbu aydınlatma metninde izah edilen gerekçelerle ve usulle işlenmesine ve bu amaçlarla sınırlı olarak aktarılmasına Açık Rıza veriyorum. <em class="req">(Zorunlu)</em></span>
+            <span><strong>Konum verisi (isteğe bağlı açık rıza):</strong> Giriş ve çıkış anında ve açık mesaim süresince saat 18:00'e kadar en fazla 15 dakikada bir telefonumun konumunun (GPS koordinatı) alınmasına, saha sınırı kontrolü ve puantaj doğrulaması amacıyla işlenmesine ve 90 gün saklanmasına açık rıza veriyorum. Bu onayı vermesem de uygulamayı kullanabilirim; onayımı istediğim zaman Rıza Tercihleri ekranından geri alabilirim. <em class="req">(İsteğe bağlı)</em></span>
             <input type="checkbox" id="consent-location">
         </label>
     </div>
@@ -148,8 +151,17 @@
 <section id="view-scanner" class="view scanner-view" hidden>
     <div id="scanner-title" class="scanner-head">Kodu Okutun</div>
     <div id="reader"></div>
+    <div class="scanner-reticle-wrap">
+        <div class="scanner-reticle">
+            <div class="reticle-corner tl"></div>
+            <div class="reticle-corner tr"></div>
+            <div class="reticle-corner bl"></div>
+            <div class="reticle-corner br"></div>
+            <div class="reticle-laser"></div>
+        </div>
+    </div>
     <div class="scanner-foot">
-        <div id="scanner-hint" class="hint">QR kodu çerçevenin içine hizalayın</div>
+        <div id="scanner-hint" class="hint">QR kodu yeşil çerçevenin içine hizalayın</div>
         <div style="display: flex; gap: 10px; justify-content: center; width: 100%;">
             <button id="btn-cancel-scan" class="btn btn-cancel" style="flex: 1; margin: 0;">Vazgeç</button>
             <button id="btn-manual-qr" class="btn" style="flex: 1; margin: 0; background: rgba(255,255,255,0.25); color: #fff; border: 1px solid rgba(255,255,255,0.4);">Kodu Elle Gir</button>
@@ -174,10 +186,10 @@
     <div class="ios-card" style="padding: 12px 16px;">
         <label for="setting-server-url" style="display:block; font-size:0.85rem; color:var(--ios-gray); margin-bottom:6px;">Sunucu Adresi (API URL)</label>
         <div style="display:flex; gap:8px;">
-            <input type="text" id="setting-server-url" placeholder="http://10.15.2.64:3000" style="flex:1; padding:8px; border:1px solid var(--ios-border); border-radius:8px; font-size:0.85rem;">
+            <input type="text" id="setting-server-url" placeholder="https://www.erkiztakip.com" style="flex:1; padding:8px; border:1px solid var(--ios-border); border-radius:8px; font-size:0.85rem;">
             <button id="btn-save-server" class="btn btn-primary" style="width:auto; padding:8px 12px; font-size:0.85rem;">Kaydet</button>
         </div>
-        <p style="font-size:0.75rem; color:var(--ios-gray); margin-top:6px; margin-bottom:0;">Yerel ağda bilgisayarınızın Wi-Fi IP adresini (örn: <code>http://10.15.2.64:3000</code>) veya internet tünel / AWS domain adresinizi girin.</p>
+        <p style="font-size:0.75rem; color:var(--ios-gray); margin-top:6px; margin-bottom:0;">Şirket sunucusunun https:// adresini girin. (Yerel ağda http:// ile test yalnızca geliştirici/debug sürümünde çalışır.)</p>
     </div>
 
     <div class="button-group">
@@ -189,10 +201,10 @@
     <div class="version" id="version-label"></div>
 </section>
 
-<script src="vendor/html5-qrcode.min.js?v=20260910-6"></script>
-<script src="config.js?v=20260910-6"></script>
-<script src="consent.js?v=20260910-6"></script>
-<script src="api.js?v=20260910-6"></script>
-<script src="app.js?v=20260910-6"></script>
+<script src="vendor/html5-qrcode.min.js?v=20260911-03"></script>
+<script src="config.js?v=20260916-dom"></script>
+<script src="consent.js?v=20260916-dom"></script>
+<script src="api.js?v=20260916-dom"></script>
+<script src="app.js?v=20260916-dom"></script>
 </body>
 </html>

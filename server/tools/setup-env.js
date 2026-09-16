@@ -136,6 +136,8 @@ async function main() {
 
     console.log('\n   Anahtarlar uretiliyor...');
     const passHash = await password.hash(adminPass);
+    // 8 haneli rastgele guvenlik PIN'i (ikinci faktor)
+    const adminPin = String(crypto.randomInt(10000000, 100000000));
 
     const content = [
         'PORT=3000',
@@ -152,6 +154,10 @@ async function main() {
         '',
         `ADMIN_USERNAME=${adminUser}`,
         `ADMIN_PASSWORD_HASH=${passHash}`,
+        `ADMIN_SECURITY_PIN=${adminPin}`,
+        '',
+        '# Android WebView disindaki ek istemci origin\'leri (virgulle)',
+        'ALLOWED_ORIGINS=',
         ''
     ].join('\n');
 
@@ -160,6 +166,9 @@ async function main() {
     fs.writeFileSync(ENV_PATH, content, { encoding: 'utf8', mode: 0o600 });
 
     console.log('       [OK] .env olusturuldu.');
+    console.log('');
+    console.log('   Yonetici guvenlik PIN kodunuz: ' + adminPin);
+    console.log('   (Giriste sifreyle birlikte sorulur. .env icinde ADMIN_SECURITY_PIN.)');
     console.log('');
     console.log('   [ONEMLI] TC_ENCRYPTION_KEY degerini KAYBETMEYIN.');
     console.log('   Bu anahtar degisirse veritabanindaki TC kimlik');

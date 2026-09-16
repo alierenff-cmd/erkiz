@@ -8,5 +8,7 @@
  * Kendi domaininizi ve gecerli TLS sertifikanizi kullanin.
  */
 window.ErkizConfig = {
-    apiBase: 'http://10.15.2.64:3000'
+    // Uretim sunucusu. Yerel agda test icin DEBUG APK'da Ayarlar > Sunucu Adresi
+    // alanina http://<bilgisayar-ip>:3000 girilebilir (release APK http kabul etmez).
+    apiBase: 'https://www.erkiztakip.com'
 };

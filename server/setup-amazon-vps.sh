@@ -88,10 +88,10 @@ if [ ! -f "$SCRIPT_DIR/.env" ]; then
     SES_SEC=$(openssl rand -hex 32)
     TC_KEY=$(openssl rand -hex 32)
     
-    # Varsayılan Admin Şifresi ve Hash
-    DEFAULT_ADMIN_PASS="ErkizAdmin2026!"
-    ADMIN_PIN="123456"
-    ADMIN_HASH=$(node -e "const p = require('./lib/password'); p.hash('${DEFAULT_ADMIN_PASS}').then(h => console.log(h));")
+    # Her kurulumda RASTGELE admin sifresi ve PIN uretilir (depoda sabit sifre yok).
+    DEFAULT_ADMIN_PASS=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-16)
+    ADMIN_PIN=$(( $(od -An -N4 -tu4 /dev/urandom) % 90000000 + 10000000 ))
+    ADMIN_HASH=$(ADMIN_PASS_ENV="$DEFAULT_ADMIN_PASS" node -e "require('./lib/password').hash(process.env.ADMIN_PASS_ENV).then(h => console.log(h));")
 
     cat > "$SCRIPT_DIR/.env" <<EOF
 PORT=3000
@@ -177,12 +177,16 @@ echo ""
 echo -e "Sunucu Yerel Portu : 127.0.0.1:3000"
 echo -e "Nginx Web Portu    : 80 (HTTP) -> Dış Dünyaya Açık"
 echo -e "Admin Kullanıcı Adı: admin"
-echo -e "Admin Varsayılan Şifre: ErkizAdmin2026!  (Lütfen .env'den değiştiriniz)"
-echo -e "Admin Güvenlik PIN : 123456"
+if [ -n "${DEFAULT_ADMIN_PASS:-}" ]; then
+echo -e "Admin Şifresi      : ${DEFAULT_ADMIN_PASS}   (BİR KEZ gösterilir, not alın)"
+echo -e "Admin Güvenlik PIN : ${ADMIN_PIN}"
+else
+echo -e "Admin bilgileri    : mevcut .env dosyasındaki değerler korundu"
+fi
 echo ""
 echo -e "${BLUE}Alan Adı (Domain) ve Ücretsiz SSL (HTTPS) Kurmak İçin:${NC}"
 echo -e "1. Domaininizi sunucunun AWS Public IP adresine yönlendirin (A kaydı)."
-echo -e "2. Şu komutu çalıştırın: ${YELLOW}sudo certbot --nginx -d takip.erkizmuhendislik.com${NC}"
+echo -e "2. Şu komutu çalıştırın: ${YELLOW}sudo certbot --nginx -d www.erkiztakip.com${NC}"
 echo ""
 echo -e "${BLUE}Servis Kontrolleri:${NC}"
 echo -e "- Canlı Durum : ${YELLOW}pm2 status${NC}"

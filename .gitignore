@@ -2,15 +2,39 @@
 .gradle/
 local.properties
 .idea/
+.kotlin/
 build/
 captures/
 .externalNativeBuild/
 .cxx/
 *.apk
-*.keystore
-google-services.json
-server/node_modules/
-server/.env
-server/logs/
+*.aab
 *.ipa
+*.keystore
+*.jks
+google-services.json
 
+# --- Gizli anahtarlar ---
+.env
+server/.env
+server/certs/
+*.key
+*.pem
+
+# --- KISISEL VERI: personel listeleri, Excel ve gecici acilmis dosyalar ---
+# TC kimlik numarasi iceren hicbir dosya git'e girmemelidir.
+*.xlsx
+*.xls
+*.csv
+*.zip
+server/scratch/
+server/scratch_seed/
+server/scratch_xlsx/
+server/sap_al11_export/
+scratch/
+
+# --- Calisma/araç artiklari ---
+.artifacts/
+server/node_modules/
+server/logs/
+*.log

@@ -11,13 +11,13 @@ android {
         applicationId = "com.erkiz.iscitakip"
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "2.2"
+        versionCode = 6
+        versionName = "2.4"
 
         // Sunucu adresi build config uzerinden gelir; koda gomulu URL yok.
         // gradle.properties veya CI ortam degiskeninden okunur.
         val apiBase = (project.findProperty("ERKIZ_API_BASE") as String?)
-            ?: "https://takip.erkizmuhendislik.com"
+            ?: "https://www.erkiztakip.com"
         buildConfigField("String", "API_BASE_URL", "\"$apiBase\"")
         resValue("string", "api_base_url", apiBase)
     }

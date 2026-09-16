@@ -96,8 +96,13 @@ class MainActivity : ComponentActivity() {
             setGeolocationEnabled(true)
             javaScriptCanOpenWindowsAutomatically = false
             setSupportMultipleWindows(false)
-            mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-            WebView.setWebContentsDebuggingEnabled(true)
+            // Release: https sayfadan http istegi ASLA yapilmaz.
+            // Debug: yerel agdaki http://<ip>:3000 test sunucusuna erisim icin izin verilir.
+            mixedContentMode = if (BuildConfig.DEBUG)
+                android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            else
+                android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         }
 
         // NativeBridge baglantisi

@@ -9,10 +9,19 @@
     const ADMIN_JS_VERSION = '20260810-v3';
     const apiBase = window.location.origin;
     const el = id => document.getElementById(id);
+
+    /** innerHTML'e giden her dinamik deger buradan gecmeli (XSS korumasi). */
+    function esc(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
     console.log('[Erkiz Admin] admin.js version:', ADMIN_JS_VERSION);
 
     let logsCache = [];
     let workersCache = [];
+    let projectsCache = [];
+    let qrCodesCache = [];
     let selectedLogForCheckout = null;
     let selectedCsvText = '';
 
@@ -38,6 +47,8 @@
     }
 
     function renderQRList(qrCodes) {
+        qrCodesCache = qrCodes || [];
+        if (typeof updateSiteDropdowns === 'function') updateSiteDropdowns();
         const list = el('qr-list');
         if (!list) return;
         list.innerHTML = '';
@@ -51,8 +62,8 @@
             li.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding: 6px 0; border-bottom: 0.5px solid #eee;';
 
             const nameSpan = document.createElement('span');
-            const gfBadge = q.center_lat ? ` <span style="font-size:0.75rem; color:#34C759;">(🗺️ Boundary: ${q.radius_m || 500}m)</span>` : '';
-            nameSpan.innerHTML = `📍 <strong>${q.site_name}</strong>${gfBadge}`;
+            const gfBadge = q.center_lat ? ` <span style="font-size:0.75rem; color:#34C759;">(🗺️ Boundary: ${esc(q.radius_m || 500)}m)</span>` : '';
+            nameSpan.innerHTML = `📍 <strong>${esc(q.site_name)}</strong>${gfBadge}`;
 
             const btnWrap = document.createElement('div');
             btnWrap.style.cssText = 'display:flex; gap:6px;';
@@ -535,6 +546,8 @@
     }
 
     function renderProjectsList(projects) {
+        projectsCache = projects || [];
+        if (typeof updateProjectDropdowns === 'function') updateProjectDropdowns();
         const list = el('projects-list');
         if (!list) return;
         list.innerHTML = '';
@@ -548,7 +561,7 @@
             li.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding: 6px 0; border-bottom: 0.5px solid #eee;';
             
             const info = document.createElement('span');
-            info.innerHTML = `<strong>${p.project_code}</strong> - ${p.project_name}`;
+            info.innerHTML = `<strong>${esc(p.project_code)}</strong> - ${esc(p.project_name)}`;
             
             const delBtn = document.createElement('button');
             delBtn.className = 'btn-delete';
@@ -613,6 +626,112 @@
             } else {
                 alert('Proje silinemedi.');
             }
+        } catch (e) {
+            alert('Bağlantı hatası.');
+        }
+    }
+
+    /* ---------------- Cihaz Kilitleri (1 Telefon = 1 İşçi) ---------------- */
+
+    let devicesCache = [];
+
+    async function loadAdminDevices() {
+        const list = el('devices-list');
+        if (!list) return;
+        try {
+            const res = await fetch(apiBase + '/api/admin/devices', { credentials: 'include' });
+            if (res.status === 401 || res.status === 403) {
+                window.location.replace('login.html');
+                return;
+            }
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            devicesCache = (await res.json()).filter(d => d.device_id !== 'DEV-ADMIN-MANUAL');
+            renderDevicesList(devicesCache);
+        } catch (e) {
+            list.textContent = 'Cihazlar yüklenemedi: ' + e.message;
+        }
+    }
+
+    function renderDevicesList(devices) {
+        const list = el('devices-list');
+        if (!list) return;
+        const q = el('search-devices') ? el('search-devices').value.trim().toLowerCase() : '';
+        list.textContent = '';
+        const filtered = devices.filter(d =>
+            !q || `${d.bound_worker_name || ''} ${d.device_id}`.toLowerCase().includes(q));
+        if (el('devices-count-badge')) {
+            el('devices-count-badge').textContent = `${filtered.length} / ${devices.length} cihaz`;
+        }
+        if (!filtered.length) {
+            const li = document.createElement('li');
+            li.style.cssText = 'color: var(--ios-gray); font-style: italic;';
+            li.textContent = 'Kayıtlı cihaz bulunamadı.';
+            list.appendChild(li);
+            return;
+        }
+        filtered.forEach(d => {
+            const li = document.createElement('li');
+            li.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:8px; padding: 6px 0; border-bottom: 0.5px solid #eee;';
+
+            const info = document.createElement('span');
+            const name = document.createElement('strong');
+            name.textContent = d.bound_worker_name || '(Henüz işçiye bağlı değil)';
+            const meta = document.createElement('small');
+            meta.style.cssText = 'display:block; color: var(--ios-gray);';
+            const last = d.last_seen ? new Date(d.last_seen).toLocaleString('tr-TR') : '-';
+            meta.textContent = `${d.device_id} · Son görülme: ${last}` + (d.blocked ? ' · ENGELLİ' : '');
+            info.appendChild(name);
+            info.appendChild(meta);
+
+            const btns = document.createElement('div');
+            btns.style.cssText = 'display:flex; gap:6px; flex-shrink:0;';
+
+            if (d.bound_worker_name) {
+                const unbindBtn = document.createElement('button');
+                unbindBtn.className = 'btn btn-primary';
+                unbindBtn.style.cssText = 'padding:4px 10px; font-size:0.8rem; width:auto;';
+                unbindBtn.textContent = 'Kilidi Kaldır';
+                unbindBtn.addEventListener('click', () => deviceAction(d, 'unbind'));
+                btns.appendChild(unbindBtn);
+            }
+
+            const blockBtn = document.createElement('button');
+            blockBtn.className = d.blocked ? 'btn btn-primary' : 'btn-delete';
+            blockBtn.style.cssText = 'padding:4px 10px; font-size:0.8rem; width:auto;';
+            blockBtn.textContent = d.blocked ? 'Engeli Kaldır' : 'Engelle';
+            blockBtn.addEventListener('click', () => deviceAction(d, d.blocked ? 'unblock' : 'block'));
+            btns.appendChild(blockBtn);
+
+            li.appendChild(info);
+            li.appendChild(btns);
+            list.appendChild(li);
+        });
+    }
+
+    async function deviceAction(d, action) {
+        const who = d.bound_worker_name || d.device_id;
+        const texts = {
+            unbind: `${who} adına kilitli telefonun kilidi kaldırılsın mı? (İşçi yeni telefonundan giriş yapabilir.)`,
+            block: `${d.device_id} cihazı engellensin mi? Bu cihazdan yeni oturum açılamaz.`,
+            unblock: `${d.device_id} cihazının engeli kaldırılsın mı?`
+        };
+        if (!confirm(texts[action])) return;
+        const id = encodeURIComponent(d.device_id);
+        const url = action === 'unbind'
+            ? `${apiBase}/api/admin/devices/${id}/unbind`
+            : `${apiBase}/api/admin/devices/${id}/block`;
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() },
+                body: JSON.stringify({ blocked: action === 'block' })
+            });
+            if (!res.ok) {
+                const b = await res.json().catch(() => ({}));
+                alert(b.error || 'İşlem başarısız.');
+            }
+            loadAdminDevices();
         } catch (e) {
             alert('Bağlantı hatası.');
         }
@@ -695,14 +814,14 @@
                 bdayTag = ' <span style="background:#FF9500; color:#fff; padding:2px 6px; border-radius:4px; font-size:0.75rem; font-weight:bold;">🎂 BUGÜN DOĞUM GÜNÜ!</span>';
             } else if (w.is_birthday_this_week) {
                 if (w.is_weekend_bday) {
-                    bdayTag = ` <span style="background:#34C759; color:#fff; padding:2px 6px; border-radius:4px; font-size:0.75rem; font-weight:bold;">🎈 BU HAFTA (${w.bday_day_name} -> Cuma Kutlanacak)</span>`;
+                    bdayTag = ` <span style="background:#34C759; color:#fff; padding:2px 6px; border-radius:4px; font-size:0.75rem; font-weight:bold;">🎈 BU HAFTA (${esc(w.bday_day_name)} -> Cuma Kutlanacak)</span>`;
                 } else {
-                    bdayTag = ` <span style="background:#007AFF; color:#fff; padding:2px 6px; border-radius:4px; font-size:0.75rem; font-weight:bold;">🎈 BU HAFTA (${w.bday_day_name})</span>`;
+                    bdayTag = ` <span style="background:#007AFF; color:#fff; padding:2px 6px; border-radius:4px; font-size:0.75rem; font-weight:bold;">🎈 BU HAFTA (${esc(w.bday_day_name)})</span>`;
                 }
             }
 
             const info = document.createElement('span');
-            info.innerHTML = `<strong>${w.first_name} ${w.last_name}</strong> (${maskTc(w.tc_no)}) - Doğum Tarihi: <strong>${w.birth_date_str}</strong>${bdayTag}`;
+            info.innerHTML = `<strong>${esc(w.first_name)} ${esc(w.last_name)}</strong> (${esc(maskTc(w.tc_no))}) - Doğum Tarihi: <strong>${esc(w.birth_date_str)}</strong>${bdayTag}`;
             
             const delBtn = document.createElement('button');
             delBtn.className = 'btn-delete';
@@ -781,8 +900,6 @@
 
     /* ---------------- Proje Yönetimi ---------------- */
 
-    let projectsCache = [];
-
     async function loadAdminProjects() {
         try {
             console.log('[Erkiz] Loading projects...');
@@ -804,6 +921,8 @@
     }
 
     function renderProjectsList(projects) {
+        projectsCache = projects || [];
+        if (typeof updateProjectDropdowns === 'function') updateProjectDropdowns();
         const list = el('projects-list');
         if (!list) return;
         list.innerHTML = '';
@@ -817,7 +936,7 @@
             li.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding: 6px 0; border-bottom: 0.5px solid #eee;';
 
             const info = document.createElement('span');
-            info.innerHTML = `🏗️ <strong>${p.project_code}</strong> - ${p.project_name}`;
+            info.innerHTML = `🏗️ <strong>${esc(p.project_code)}</strong> - ${esc(p.project_name)}`;
 
             const delBtn = document.createElement('button');
             delBtn.className = 'btn-delete';
@@ -987,6 +1106,244 @@
         return s;
     }
 
+    /* ---------------- Excel (.xlsx) Puantaj ve Maaş İndirme ---------------- */
+
+    function downloadAttendanceExcel() {
+        const month = el('excel-month') ? el('excel-month').value : '';
+        const project = el('excel-project') ? el('excel-project').value : 'all';
+
+        let url = `${apiBase}/api/admin/reports/excel?month=${encodeURIComponent(month)}`;
+        if (project && project !== 'all') {
+            url += `&project=${encodeURIComponent(project)}`;
+        }
+
+        window.location.href = url;
+    }
+
+    function setupExcelReportControls() {
+        const monthInput = el('excel-month');
+        if (monthInput && !monthInput.value) {
+            const now = new Date();
+            const yyyy = now.getFullYear();
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            monthInput.value = `${yyyy}-${mm}`;
+        }
+
+        if (el('btn-download-excel')) {
+            el('btn-download-excel').addEventListener('click', downloadAttendanceExcel);
+        }
+
+        if (el('btn-quick-this-month')) {
+            el('btn-quick-this-month').addEventListener('click', () => {
+                const now = new Date();
+                const yyyy = now.getFullYear();
+                const mm = String(now.getMonth() + 1).padStart(2, '0');
+                if (el('excel-month')) el('excel-month').value = `${yyyy}-${mm}`;
+            });
+        }
+
+        if (el('btn-quick-last-month')) {
+            el('btn-quick-last-month').addEventListener('click', () => {
+                const d = new Date();
+                d.setMonth(d.getMonth() - 1);
+                const yyyy = d.getFullYear();
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                if (el('excel-month')) el('excel-month').value = `${yyyy}-${mm}`;
+            });
+        }
+
+        if (el('btn-quick-all')) {
+            el('btn-quick-all').addEventListener('click', () => {
+                if (el('excel-month')) el('excel-month').value = '';
+            });
+        }
+    }
+
+    function updateProjectDropdowns() {
+        const filterSel = el('excel-project');
+        if (filterSel) {
+            const cur = filterSel.value;
+            filterSel.innerHTML = '<option value="all">Tüm Projeler</option>';
+            if (projectsCache && projectsCache.length) {
+                projectsCache.forEach(p => {
+                    const opt = document.createElement('option');
+                    const val = p.project_code || p.project_name;
+                    opt.value = val;
+                    opt.textContent = `${p.project_code} - ${p.project_name}`;
+                    filterSel.appendChild(opt);
+                });
+            }
+            if (cur) filterSel.value = cur;
+        }
+
+        const manualSel = el('manual-att-project');
+        if (manualSel) {
+            const cur = manualSel.value;
+            manualSel.innerHTML = '';
+            if (projectsCache && projectsCache.length) {
+                projectsCache.forEach(p => {
+                    const opt = document.createElement('option');
+                    const val = p.project_code || p.project_name;
+                    opt.value = val;
+                    opt.textContent = `${p.project_code} - ${p.project_name}`;
+                    manualSel.appendChild(opt);
+                });
+            } else {
+                const opt = document.createElement('option');
+                opt.value = 'ŞÖLEN';
+                opt.textContent = 'ŞÖLEN';
+                manualSel.appendChild(opt);
+            }
+            if (cur) manualSel.value = cur;
+        }
+    }
+
+    function updateSiteDropdowns() {
+        const manualSiteSel = el('manual-att-site');
+        if (manualSiteSel) {
+            const cur = manualSiteSel.value;
+            manualSiteSel.innerHTML = '';
+            if (qrCodesCache && qrCodesCache.length) {
+                qrCodesCache.forEach(q => {
+                    const opt = document.createElement('option');
+                    opt.value = q.site_name;
+                    opt.textContent = q.site_name;
+                    manualSiteSel.appendChild(opt);
+                });
+            } else {
+                const opt = document.createElement('option');
+                opt.value = 'Merkez Saha';
+                opt.textContent = 'Merkez Saha';
+                manualSiteSel.appendChild(opt);
+            }
+            if (cur) manualSiteSel.value = cur;
+        }
+    }
+
+    /* ---------------- Manuel Günlük Puantaj / Vardiya Ekleme ---------------- */
+
+    function openManualAttendanceModal() {
+        const modal = el('modal-manual-attendance');
+        if (!modal) return;
+
+        const workerSelect = el('manual-att-worker');
+        if (workerSelect) {
+            workerSelect.innerHTML = '<option value="">-- İşçi Seçin (TC - Ad Soyad) --</option>';
+            if (workersCache && workersCache.length) {
+                workersCache.forEach(w => {
+                    const opt = document.createElement('option');
+                    opt.value = w.tc_no;
+                    opt.textContent = `${w.tc_no} - ${w.first_name} ${w.last_name}`;
+                    workerSelect.appendChild(opt);
+                });
+            }
+        }
+
+        const dateInput = el('manual-att-date');
+        if (dateInput && !dateInput.value) {
+            const today = new Date().toISOString().slice(0, 10);
+            dateInput.value = today;
+        }
+
+        updateProjectDropdowns();
+        updateSiteDropdowns();
+
+        const alertBox = el('manual-att-alert');
+        if (alertBox) {
+            alertBox.style.display = 'none';
+            alertBox.textContent = '';
+        }
+
+        modal.hidden = false;
+    }
+
+    function closeManualAttendanceModal() {
+        const modal = el('modal-manual-attendance');
+        if (modal) modal.hidden = true;
+    }
+
+    async function submitManualAttendance() {
+        const tc = el('manual-att-worker') ? el('manual-att-worker').value : '';
+        const date = el('manual-att-date') ? el('manual-att-date').value : '';
+        const checkIn = el('manual-att-in-time') ? el('manual-att-in-time').value : '';
+        const checkOut = el('manual-att-out-time') ? el('manual-att-out-time').value : '';
+        const project = el('manual-att-project') ? el('manual-att-project').value : '';
+        const site = el('manual-att-site') ? el('manual-att-site').value : '';
+        const activity = el('manual-att-activity') ? el('manual-att-activity').value : '';
+        const note = el('manual-att-note') ? el('manual-att-note').value : '';
+
+        if (!tc) {
+            showManualAttAlert('Lütfen bir işçi seçiniz.', 'error');
+            return;
+        }
+        if (!date) {
+            showManualAttAlert('Lütfen çalışma tarihini seçiniz.', 'error');
+            return;
+        }
+        if (!checkIn || !checkOut) {
+            showManualAttAlert('Giriş ve çıkış saatlerini giriniz.', 'error');
+            return;
+        }
+
+        const btn = el('btn-save-manual-attendance');
+        if (btn) btn.disabled = true;
+
+        try {
+            const res = await fetch(`${apiBase}/api/admin/attendance/manual`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': getCsrfToken()
+                },
+                body: JSON.stringify({
+                    tc_no: tc,
+                    date: date,
+                    check_in_time: checkIn,
+                    check_out_time: checkOut,
+                    project: project,
+                    qr_data: site,
+                    activity: activity,
+                    note: note
+                })
+            });
+
+            const data = await res.json();
+            if (!res.ok || !data.ok) {
+                showManualAttAlert(data.error || 'Kayıt eklenemedi.', 'error');
+                if (btn) btn.disabled = false;
+                return;
+            }
+
+            showManualAttAlert(data.message || 'Puantaj kaydı başarıyla eklendi.', 'success');
+            setTimeout(() => {
+                closeManualAttendanceModal();
+                if (btn) btn.disabled = false;
+                loadLogs();
+            }, 1200);
+
+        } catch (e) {
+            showManualAttAlert('Bağlantı hatası: ' + e.message, 'error');
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    function showManualAttAlert(msg, type) {
+        const alertBox = el('manual-att-alert');
+        if (!alertBox) return;
+        alertBox.style.display = 'block';
+        alertBox.textContent = msg;
+        if (type === 'success') {
+            alertBox.style.backgroundColor = '#dcfce7';
+            alertBox.style.color = '#15803d';
+            alertBox.style.border = '1px solid #86efac';
+        } else {
+            alertBox.style.backgroundColor = '#fee2e2';
+            alertBox.style.color = '#b91c1c';
+            alertBox.style.border = '1px solid #fca5a5';
+        }
+    }
+
     function downloadSAPCSV() {
         window.location.href = apiBase + '/api/sap/export?format=csv';
     }
@@ -1070,7 +1427,15 @@
             if (!isNaN(lat) && !isNaN(lng)) updateGeofenceMapPin(lat, lng);
         });
         if (el('btn-logout')) el('btn-logout').addEventListener('click', logout);
+        if (el('btn-open-manual-attendance')) el('btn-open-manual-attendance').addEventListener('click', openManualAttendanceModal);
+        if (el('btn-cancel-manual-attendance')) el('btn-cancel-manual-attendance').addEventListener('click', closeManualAttendanceModal);
+        if (el('btn-save-manual-attendance')) el('btn-save-manual-attendance').addEventListener('click', submitManualAttendance);
 
+        if (el('btn-refresh-devices')) el('btn-refresh-devices').addEventListener('click', loadAdminDevices);
+        if (el('search-devices')) el('search-devices').addEventListener('input', () => renderDevicesList(devicesCache));
+
+        setupExcelReportControls();
+        loadAdminDevices();
         loadAdminWorkers();
         loadAdminProjects();
         loadAdminQRCodes();

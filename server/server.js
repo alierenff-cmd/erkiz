@@ -27,6 +27,7 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const mysql = require('mysql2/promise');
 const sapIntegration = require('./lib/sapIntegration');
+const excelReport = require('./lib/excelReport');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -58,21 +59,33 @@ const pool = mysql.createPool({
 
 app.set('trust proxy', 1);
 
-// CORS Desteği (Android WebView ve mobil cihazlar için)
+// CORS: yalnizca bilinen istemci origin'lerine izin verilir.
+// Android WebView origin'i sabittir; ek origin'ler .env -> ALLOWED_ORIGINS (virgulle).
+const ALLOWED_ORIGINS = new Set([
+    'https://appassets.androidplatform.net',
+    'capacitor://localhost',
+    'https://localhost',
+    ...String(process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean)
+]);
+
 app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS, DELETE');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-CSRF-Token');
-    res.setHeader('Strict-Transport-Security', 'max-age=0');
+    const origin = req.get('Origin');
+    if (origin && ALLOWED_ORIGINS.has(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS, DELETE');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-CSRF-Token');
+    }
     if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
+        return res.sendStatus(origin && ALLOWED_ORIGINS.has(origin) ? 204 : 403);
     }
     next();
 });
 
 app.use(helmet({
     contentSecurityPolicy: false,
-    hsts: { maxAge: 0 },
+    // HSTS yalnizca HTTPS uzerinden gelen yanitlarda tarayici tarafindan dikkate alinir.
+    hsts: { maxAge: 180 * 24 * 60 * 60, includeSubDomains: false },
     crossOriginOpenerPolicy: false,
     crossOriginResourcePolicy: false,
     crossOriginEmbedderPolicy: false,
@@ -82,6 +95,13 @@ app.use(express.json({ limit: '16kb' }));
 app.use(cookieParser(process.env.SESSION_SECRET));
 
 /* ---------------- Yardimcilar ---------------- */
+
+/** Express 4 async hatalari yakalamaz; yakalanmayan hata istegi askida birakir. */
+const wrap = fn => (req, res, next) =>
+    Promise.resolve(fn(req, res, next)).catch(err => {
+        console.error(err);
+        if (!res.headersSent) res.status(500).json({ error: 'Sunucu hatası.' });
+    });
 
 /** TC No dogrulama - istemci tarafi atlatılabilir, burada tekrar edilir. */
 function isValidTC(value) {
@@ -196,10 +216,10 @@ function getBirthdayStatus(bdate) {
 
 const registerLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 20 });
 const actionLimiter   = rateLimit({ windowMs: 60 * 1000, max: 10 });
-const loginLimiter    = rateLimit({ windowMs: 15 * 60 * 1000, max: 100,
+const loginLimiter    = rateLimit({ windowMs: 15 * 60 * 1000, max: 8,
                                     skipSuccessfulRequests: true });
 
-app.post('/api/device/register', registerLimiter, async (req, res) => {
+app.post('/api/device/register', registerLimiter, wrap(async (req, res) => {
     const deviceId = String(req.body.device_id || '');
     if (!/^DEV-[A-F0-9]{18}$/.test(deviceId)) {
         return res.status(400).json({ error: 'Geçersiz cihaz kimliği.' });
@@ -221,7 +241,7 @@ app.post('/api/device/register', registerLimiter, async (req, res) => {
     const token = jwt.sign({ did: deviceId }, process.env.JWT_SECRET,
                            { expiresIn: '15m' });
     res.json({ token, expires_in: 900 });
-});
+}));
 
 function requireDevice(req, res, next) {
     const header = req.get('Authorization') || '';
@@ -235,7 +255,54 @@ function requireDevice(req, res, next) {
     }
 }
 
+function getDistanceMeters(lat1, lon1, lat2, lon2) {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+}
+
+/**
+ * Koordinat sahanin geofence siniri disinda mi?
+ * NOT: Onceden handleAction icinde tanimliydi; /api/location-ping bu fonksiyona
+ * erisemedigi icin her ping 500 donuyordu. Modul seviyesine tasindi.
+ */
+async function isWorkerOutOfBounds(siteName, lat, lng) {
+    if (!siteName || lat == null || lng == null) return false;
+    try {
+        const [sites] = await pool.execute('SELECT center_lat, center_lng, radius_m FROM qr_codes WHERE site_name = ?', [siteName]);
+        if (!sites || !sites.length || sites[0].center_lat == null || sites[0].center_lng == null) return false;
+        const dist = getDistanceMeters(lat, lng, Number(sites[0].center_lat), Number(sites[0].center_lng));
+        return dist > Number(sites[0].radius_m || 500);
+    } catch (e) {
+        return false;
+    }
+}
+
+/**
+ * Unutulan acik mesainin kapanis saati:
+ *  - 18:00'den once giris -> ayni gun 18:00
+ *  - 18:00 veya sonrasi giris (gece vardiyasi) -> ayni gun 23:59:59
+ *  - Hicbir durumda "simdi"den ileri bir saat yazilmaz.
+ */
+const AUTO_CLOSE_TIME_SQL = `LEAST(NOW(), CASE WHEN TIME(check_in_time) < '18:00:00'
+        THEN CONCAT(DATE(check_in_time), ' 18:00:00')
+        ELSE CONCAT(DATE(check_in_time), ' 23:59:59') END)`;
+
 /* ---------------- Giris / Cikis ---------------- */
+
+function normalizeSiteName(name) {
+    if (!name) return '';
+    let s = String(name).trim();
+    if (s.includes('ｿﾅ淌') || s.includes('ﾅ淌ｶ') || s.includes('淌ｶ')) {
+        return 'şölen';
+    }
+    return s;
+}
 
 async function handleAction(req, res, mode) {
     const { tc_no, first_name, last_name, qr_data, consent, activity, project } = req.body;
@@ -248,7 +315,7 @@ async function handleAction(req, res, mode) {
     if (first.length < 2 || last.length < 2) {
         return res.status(400).json({ message: 'Ad ve soyad zorunludur.' });
     }
-    const site = String(qr_data || '').trim().slice(0, 200);
+    const site = normalizeSiteName(qr_data).slice(0, 200);
     if (!site) {
         return res.status(400).json({ message: 'Geçersiz QR kodu.' });
     }
@@ -280,7 +347,7 @@ async function handleAction(req, res, mode) {
 
     // 0. İşçi T.C. Kimlik No Sistemde Kayıtlı mı Kontrolü (Kayıtsız T.C. engelleme)
     const [registeredWorker] = await pool.execute(
-        `SELECT birth_date FROM workers WHERE tc_hash = ?`,
+        `SELECT first_name, last_name, birth_date FROM workers WHERE tc_hash = ?`,
         [tcHash]
     );
 
@@ -290,16 +357,35 @@ async function handleAction(req, res, mode) {
         });
     }
 
-    // 1. Cihaz Kilidi Kontrolü (1 Telefon = 1 İşçi Kuralı / Çavuş & Sahtecilik Önleme)
+    // Puantaja istemcinin yazdigi ad-soyad degil, IK kaydindaki resmi ad-soyad yazilir.
+    const workerFirst = registeredWorker[0].first_name || first;
+    const workerLast = registeredWorker[0].last_name || last;
+
+    // 1a. Bu TC baska bir telefona kilitli mi? (Yeni cihaz kimligi uretip kilidi atlatmayi engeller)
+    const [otherDev] = await pool.execute(
+        `SELECT device_id FROM devices WHERE bound_tc_hash = ? AND device_id <> ? LIMIT 1`,
+        [tcHash, req.device.did]
+    );
+    if (otherDev.length) {
+        return res.status(403).json({
+            message: 'Bu T.C. Kimlik No başka bir telefona kayıtlıdır. Telefon değiştirdiyseniz yöneticinizden eski cihaz kilidini kaldırmasını isteyin.'
+        });
+    }
+
+    // 1b. Cihaz Kilidi Kontrolü (1 Telefon = 1 İşçi Kuralı / Çavuş & Sahtecilik Önleme)
     const [devRows] = await pool.execute(
-        `SELECT bound_tc_hash, bound_worker_name FROM devices WHERE device_id = ?`,
+        `SELECT bound_tc_hash, bound_worker_name, blocked FROM devices WHERE device_id = ?`,
         [req.device.did]
     );
+
+    if (devRows.length && devRows[0].blocked) {
+        return res.status(403).json({ message: 'Bu cihaz yönetici tarafından engellenmiştir.' });
+    }
 
     if (devRows && devRows.length > 0) {
         if (!devRows[0].bound_tc_hash) {
             // İlk kez bir işçi bu telefondan işlem yapıyor -> Cihazı bu personele bağla
-            const workerFullName = `${first} ${last}`;
+            const workerFullName = `${workerFirst} ${workerLast}`;
             await pool.execute(
                 `UPDATE devices SET bound_tc_hash = ?, bound_worker_name = ? WHERE device_id = ?`,
                 [tcHash, workerFullName, req.device.did]
@@ -317,8 +403,8 @@ async function handleAction(req, res, mode) {
         // 2. Gece Otomatik Kapanış: Dünden veya daha önceden açık kalan bir mesai kaydı varsa OTOMATİK KAPAT
         await pool.execute(
             `UPDATE attendance_logs
-             SET check_out_time = CONCAT(DATE(check_in_time), ' 18:00:00'),
-                 duration_minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_time, CONCAT(DATE(check_in_time), ' 18:00:00'))),
+             SET check_out_time = ${AUTO_CLOSE_TIME_SQL},
+                 duration_minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_time, ${AUTO_CLOSE_TIME_SQL})),
                  auto_closed = TRUE,
                  auto_close_reason = 'Dünden Açık Kalan Mesai Sistem Tarafından Kapatıldı'
              WHERE tc_hash = ? AND check_out_time IS NULL AND DATE(check_in_time) < CURDATE()`,
@@ -327,8 +413,8 @@ async function handleAction(req, res, mode) {
 
         await pool.execute(
             `UPDATE attendance_logs
-             SET check_out_time = CONCAT(DATE(check_in_time), ' 18:00:00'),
-                 duration_minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_time, CONCAT(DATE(check_in_time), ' 18:00:00'))),
+             SET check_out_time = ${AUTO_CLOSE_TIME_SQL},
+                 duration_minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_time, ${AUTO_CLOSE_TIME_SQL})),
                  auto_closed = TRUE,
                  auto_close_reason = 'Dünden Açık Kalan Mesai Sistem Tarafından Kapatıldı'
              WHERE device_id = ? AND check_out_time IS NULL AND DATE(check_in_time) < CURDATE()`,
@@ -369,29 +455,6 @@ async function handleAction(req, res, mode) {
             });
         }
 
-        function getDistanceMeters(lat1, lon1, lat2, lon2) {
-            const R = 6371000;
-            const dLat = (lat2 - lat1) * Math.PI / 180;
-            const dLon = (lon2 - lon1) * Math.PI / 180;
-            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-                      Math.sin(dLon / 2) * Math.sin(dLon / 2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-            return R * c;
-        }
-
-        async function isWorkerOutOfBounds(siteName, lat, lng) {
-            if (!siteName || lat == null || lng == null) return false;
-            try {
-                const [sites] = await pool.execute('SELECT center_lat, center_lng, radius_m FROM qr_codes WHERE site_name = ?', [siteName]);
-                if (!sites || !sites.length || sites[0].center_lat == null || sites[0].center_lng == null) return false;
-                const dist = getDistanceMeters(lat, lng, Number(sites[0].center_lat), Number(sites[0].center_lng));
-                return dist > Number(sites[0].radius_m || 500);
-            } catch (e) {
-                return false;
-            }
-        }
-
         const outOfBounds = loc ? await isWorkerOutOfBounds(site, loc.latitude, loc.longitude) : false;
 
         // 3. Yeni giriş kaydı oluştur
@@ -401,7 +464,7 @@ async function handleAction(req, res, mode) {
               check_in_time, in_latitude, in_longitude, in_accuracy_m,
               location_consent, consent_version, consent_granted_at, is_out_of_bounds)
              VALUES (?,?,?,?,?,?,?,?,NOW(),?,?,?,?,?,?,?)`,
-            [tcHash, tcEnc, first, last, site, req.device.did, activityVal, projectVal,
+            [tcHash, tcEnc, workerFirst, workerLast, site, req.device.did, activityVal, projectVal,
              loc ? loc.latitude : null, loc ? loc.longitude : null,
              loc ? loc.accuracy_m : null, locationAllowed,
              Number(consent.version), formatMysqlDateTime(consent.core_granted_at), outOfBounds]
@@ -413,7 +476,7 @@ async function handleAction(req, res, mode) {
             if (registeredWorker[0] && registeredWorker[0].birth_date) {
                 const bStatus = getBirthdayStatus(registeredWorker[0].birth_date);
                 if (bStatus.shouldCelebrateToday) {
-                    birthdayMessage = `🎂 Doğum gününüz kutlu olsun ${first} ${last}, Erkiz Mühendislik ailesi olarak kutlarız. Lütfen İnsan Kaynaklarına uğrayınız. 🎁`;
+                    birthdayMessage = `🎂 Doğum gününüz kutlu olsun ${workerFirst} ${workerLast}, Erkiz Mühendislik ailesi olarak kutlarız. Lütfen İnsan Kaynaklarına uğrayınız. 🎁`;
                 }
             }
         } catch (e) {}
@@ -465,32 +528,40 @@ app.post('/api/check-out', actionLimiter, requireDevice,
 app.post('/api/location-ping', actionLimiter, requireDevice, async (req, res) => {
     try {
         // Saat 18:00 ve sonrasında gelen konum pinglemesini sunucu seviyesinde reddet (KVKK Koruması)
-        const now = new Date();
-        const hour = now.getHours();
+        const hour = new Date().getHours();
         if (hour >= 18) {
             return res.json({ ok: false, message: 'Saat 18:00 sonrasında konum takibi otomatik olarak kapatılmıştır.' });
         }
 
-        const { tc_no, location } = req.body;
-        if (!tc_no || !location) {
-            return res.status(400).json({ error: 'Eksik veri.' });
+        // KVKK: konum rizasi yoksa konum saklanmaz (istemci gonderse bile).
+        const consent = req.body.consent;
+        if (!consent || consent.location_granted !== true) {
+            return res.json({ ok: false, message: 'Konum rızası olmadığından konum kaydedilmedi.' });
         }
 
-        const tcHash = hashTC(tc_no);
+        const loc = validateLocation(req.body.location);
+        if (!loc) {
+            return res.status(400).json({ error: 'Geçersiz konum.' });
+        }
 
-        // İşçi şu an açık mesaide mi?
+        // Kimlik istemcinin gonderdigi TC'den DEGIL, cihazin kilitli oldugu isciden alinir.
+        // Boylece bir cihaz baska bir iscinin adina konum yazamaz.
+        const [devRows] = await pool.execute(
+            'SELECT bound_tc_hash, blocked FROM devices WHERE device_id = ?', [req.device.did]);
+        const tcHash = devRows.length && !devRows[0].blocked ? devRows[0].bound_tc_hash : null;
+        if (!tcHash) {
+            return res.json({ ok: false, message: 'Cihaz bir işçiye bağlı değil.' });
+        }
+
+        // İşçi şu an bu cihazdan açık mesaide mi?
         const [open] = await pool.execute(
-            `SELECT id, qr_data FROM attendance_logs WHERE tc_hash = ? AND check_out_time IS NULL LIMIT 1`,
-            [tcHash]
+            `SELECT id, qr_data FROM attendance_logs
+             WHERE tc_hash = ? AND device_id = ? AND check_out_time IS NULL LIMIT 1`,
+            [tcHash, req.device.did]
         );
 
         if (!open.length) {
             return res.json({ ok: false, message: 'Açık mesai kaydı bulunmadığından konum kaydedilmedi.' });
-        }
-
-        const loc = validateLocation(location);
-        if (!loc) {
-            return res.status(400).json({ error: 'Geçersiz konum.' });
         }
 
         const outOfBounds = await isWorkerOutOfBounds(open[0].qr_data, loc.latitude, loc.longitude);
@@ -510,7 +581,8 @@ app.post('/api/location-ping', actionLimiter, requireDevice, async (req, res) =>
 
         res.json({ ok: true });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error('[location-ping]', err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
     }
 });
 
@@ -522,12 +594,17 @@ app.post('/api/admin/login', loginLimiter, async (req, res) => {
     const username = String(req.body.username || '');
     const plainPassword = String(req.body.password || '');
 
-    const userOk = username === process.env.ADMIN_USERNAME;
+    const plainPin = String(req.body.pin || '');
+
+    const userOk = safeEqual(username, process.env.ADMIN_USERNAME);
     const passOk = await password.compare(
         plainPassword, process.env.ADMIN_PASSWORD_HASH);
+    // PIN tanimliysa zorunludur (ikinci faktor).
+    const pinOk = !process.env.ADMIN_SECURITY_PIN ||
+                  safeEqual(plainPin, process.env.ADMIN_SECURITY_PIN);
 
     // Hangisinin yanlis oldugunu sizdirmiyoruz.
-    if (!userOk || !passOk) {
+    if (!userOk || !passOk || !pinOk) {
         return res.status(401).json({ error: 'Giriş bilgileri hatalı.' });
     }
 
@@ -543,6 +620,16 @@ app.post('/api/admin/login', loginLimiter, async (req, res) => {
         maxAge: 2 * 60 * 60 * 1000
     });
     res.json({ ok: true });
+});
+
+function safeEqual(a, b) {
+    const ha = crypto.createHash('sha256').update(String(a)).digest();
+    const hb = crypto.createHash('sha256').update(String(b || '')).digest();
+    return crypto.timingSafeEqual(ha, hb);
+}
+
+app.get('/api/admin/login-config', (req, res) => {
+    res.json({ pin_required: !!process.env.ADMIN_SECURITY_PIN });
 });
 
 function requireAdmin(req, res, next) {
@@ -585,7 +672,8 @@ app.get('/api/admin/workers', requireAdmin, async (req, res) => {
             };
         }));
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
     }
 });
 
@@ -616,7 +704,8 @@ app.post('/api/admin/workers', requireAdmin, async (req, res) => {
         );
         res.json({ ok: true });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
     }
 });
 
@@ -626,7 +715,8 @@ app.delete('/api/admin/workers/:id', requireAdmin, async (req, res) => {
         await pool.execute('DELETE FROM workers WHERE id = ?', [id]);
         res.json({ ok: true });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
     }
 });
 
@@ -714,7 +804,8 @@ app.post('/api/admin/workers/import-csv', requireAdmin, async (req, res) => {
             fail_count: failCount
         });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
     }
 });
 
@@ -732,7 +823,8 @@ app.get('/api/admin/projects', requireAdmin, async (req, res) => {
         const [rows] = await pool.execute('SELECT * FROM projects ORDER BY created_at DESC');
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
     }
 });
 
@@ -754,16 +846,22 @@ app.post('/api/admin/projects', requireAdmin, async (req, res) => {
         if (err.code === 'ER_DUP_ENTRY') {
             return res.status(400).json({ error: 'Bu proje kodu zaten mevcut.' });
         }
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
     }
 });
 
 app.delete('/api/admin/projects/:id', requireAdmin, async (req, res) => {
     try {
-        await pool.execute('DELETE FROM projects WHERE id = ?', [req.params.id]);
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) {
+            return res.status(400).json({ error: 'Geçersiz ID.' });
+        }
+        await pool.execute('DELETE FROM projects WHERE id = ?', [id]);
         res.json({ ok: true });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
     }
 });
 
@@ -774,7 +872,8 @@ app.get('/api/admin/qr-codes', requireAdmin, async (req, res) => {
         const [rows] = await pool.execute('SELECT * FROM qr_codes ORDER BY created_at DESC');
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
     }
 });
 
@@ -790,7 +889,8 @@ app.post('/api/admin/qr-codes', requireAdmin, async (req, res) => {
         );
         res.json({ ok: true, site_name: siteName });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
     }
 });
 
@@ -803,7 +903,8 @@ app.delete('/api/admin/qr-codes/:id', requireAdmin, async (req, res) => {
         await pool.execute('DELETE FROM qr_codes WHERE id = ?', [id]);
         res.json({ ok: true });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
     }
 });
 
@@ -815,17 +916,23 @@ app.put('/api/admin/qr-codes/:id/geofence', requireAdmin, async (req, res) => {
         if (!Number.isInteger(id) || id <= 0) {
             return res.status(400).json({ error: 'Geçersiz ID.' });
         }
+        const geo = validateLocation({ latitude: center_lat, longitude: center_lng });
+        const radius = Math.round(Number(radius_m) || 500);
+        if (!geo || radius < 10 || radius > 50000) {
+            return res.status(400).json({ error: 'Geçersiz koordinat veya yarıçap (10 - 50000 m).' });
+        }
 
         await pool.execute(
             `UPDATE qr_codes
              SET center_lat = ?, center_lng = ?, radius_m = ?
              WHERE id = ?`,
-            [center_lat, center_lng, radius_m || 500, id]
+            [geo.latitude, geo.longitude, radius, id]
         );
 
         res.json({ ok: true });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
     }
 });
 
@@ -839,7 +946,8 @@ app.get('/api/admin/devices', requireAdmin, async (req, res) => {
         );
         res.json(rows);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
     }
 });
 
@@ -850,15 +958,35 @@ app.post('/api/admin/devices/:deviceId/unbind', requireAdmin, async (req, res) =
             `UPDATE devices SET bound_tc_hash = NULL, bound_worker_name = NULL WHERE device_id = ?`,
             [deviceId]
         );
+        await pool.execute(
+            `INSERT INTO admin_access_log (admin_user, action, record_count, ip, created_at)
+             VALUES (?,?,?,?,NOW())`, [req.admin.user, 'device_unbind:' + deviceId, 1, req.ip]);
         res.json({ ok: true, message: 'Cihaz kilidi başarıyla kaldırıldı.' });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
+    }
+});
+
+app.post('/api/admin/devices/:deviceId/block', requireAdmin, async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        const blocked = req.body.blocked === true;
+        await pool.execute('UPDATE devices SET blocked = ? WHERE device_id = ?', [blocked, deviceId]);
+        await pool.execute(
+            `INSERT INTO admin_access_log (admin_user, action, record_count, ip, created_at)
+             VALUES (?,?,?,?,NOW())`,
+            [req.admin.user, (blocked ? 'device_block:' : 'device_unblock:') + deviceId, 1, req.ip]);
+        res.json({ ok: true });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Sunucu hatası.' });
     }
 });
 
 /* ---------------- Puantaj ve Giriş-Çıkış Kayıtları ---------------- */
 
-app.get('/api/logs', requireAdmin, async (req, res) => {
+app.get('/api/logs', requireAdmin, wrap(async (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 500, 2000);
 
     const [rows] = await pool.execute(
@@ -879,7 +1007,7 @@ app.get('/api/logs', requireAdmin, async (req, res) => {
 
     // Panelde maskeli gosterildigi icin TC'yi coz ama son 3 + ilk 3 hane yeter.
     res.json(rows.map(r => ({ ...r, tc_no: decryptTC(r.tc_encrypted), tc_encrypted: undefined })));
-});
+}));
 
 function decryptTC(payload) {
     try {
@@ -897,7 +1025,7 @@ function decryptTC(payload) {
     }
 }
 
-app.delete('/api/logs/:id', requireAdmin, async (req, res) => {
+app.delete('/api/logs/:id', requireAdmin, wrap(async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
         return res.status(400).json({ error: 'Geçersiz kayıt.' });
@@ -907,9 +1035,9 @@ app.delete('/api/logs/:id', requireAdmin, async (req, res) => {
         `INSERT INTO admin_access_log (admin_user, action, record_count, ip, created_at)
          VALUES (?,?,?,?,NOW())`, [req.admin.user, 'delete_log:' + id, 1, req.ip]);
     res.json({ ok: true });
-});
+}));
 
-app.post('/api/admin/checkout', requireAdmin, async (req, res) => {
+app.post('/api/admin/checkout', requireAdmin, wrap(async (req, res) => {
     const id = Number(req.body.id);
     const customTimeStr = req.body.check_out_time ? String(req.body.check_out_time).trim() : null;
 
@@ -946,6 +1074,185 @@ app.post('/api/admin/checkout', requireAdmin, async (req, res) => {
          VALUES (?,?,?,?,NOW())`, [req.admin.user, 'manual_checkout:' + id, 1, req.ip]);
 
     res.json({ ok: true, message: 'İşçi çıkışı manuel olarak kaydedildi.' });
+}));
+
+/* ---------------- Excel Puantaj ve Maaş Raporları ---------------- */
+
+/**
+ * GET /api/admin/reports/excel
+ * Günlük ve aylık puantaj ile maaş hakediş hesaplamalarını içeren çok sayfalı Excel (.xlsx) oluşturur.
+ * Parametreler: month (YYYY-MM), start_date, end_date, project
+ */
+app.get('/api/admin/reports/excel', requireAdmin, async (req, res) => {
+    try {
+        const month = req.query.month ? String(req.query.month).trim() : '';
+        const startDate = req.query.start_date ? String(req.query.start_date).trim() : null;
+        const endDate = req.query.end_date ? String(req.query.end_date).trim() : null;
+        const project = req.query.project ? String(req.query.project).trim() : null;
+
+        let sql = `SELECT id, tc_encrypted, first_name, last_name, qr_data, project, activity,
+                          check_in_time, check_out_time, duration_minutes,
+                          in_latitude, in_longitude, in_accuracy_m, location_consent,
+                          is_out_of_bounds, auto_closed, auto_close_reason, device_id
+                   FROM attendance_logs WHERE 1=1`;
+        const params = [];
+
+        if (month && /^\d{4}-\d{2}$/.test(month)) {
+            sql += ` AND DATE_FORMAT(check_in_time, '%Y-%m') = ?`;
+            params.push(month);
+        } else if (startDate && endDate) {
+            sql += ` AND check_in_time >= ? AND check_in_time <= ?`;
+            params.push(startDate + ' 00:00:00', endDate + ' 23:59:59');
+        } else if (startDate) {
+            sql += ` AND check_in_time >= ?`;
+            params.push(startDate + ' 00:00:00');
+        }
+
+        if (project && project !== 'all' && project !== 'Tümü') {
+            sql += ` AND (project = ? OR qr_data = ?)`;
+            params.push(project, project);
+        }
+
+        sql += ` ORDER BY check_in_time ASC`;
+
+        const [rows] = await pool.execute(sql, params);
+
+        // KVKK Loglama
+        await pool.execute(
+            `INSERT INTO admin_access_log (admin_user, action, record_count, ip, created_at)
+             VALUES (?,?,?,?,NOW())`,
+            [req.admin.user, 'export_excel:' + (month || 'all'), rows.length, req.ip]
+        );
+
+        // TC'leri çöz
+        const decryptedRows = rows.map(r => ({
+            ...r,
+            tc_no: decryptTC(r.tc_encrypted)
+        }));
+
+        // Excel çalışma kitabını oluştur
+        const workbook = await excelReport.generateAttendanceWorkbook(decryptedRows, {
+            periodMonth: month || new Date().toISOString().slice(0, 7),
+            standardDailyHours: 7.5
+        });
+
+        const safeMonth = month || new Date().toISOString().slice(0, 7);
+        const fileName = `Erkiz_Calisma_Saatleri_Puantaj_${safeMonth}.xlsx`;
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (err) {
+        console.error('[Excel Rapor Hata]:', err);
+        res.status(500).json({ error: 'Excel raporu oluşturulurken hata. Ayrıntılar sunucu kaydında.' });
+    }
+});
+
+/**
+ * POST /api/admin/attendance/manual
+ * Gün bitiminde veya sonrasında manuel günlük puantaj/vardiya kaydı ekler.
+ * Gövde: { tc_no, date, check_in_time, check_out_time, project, qr_data, activity, note }
+ */
+app.post('/api/admin/attendance/manual', requireAdmin, async (req, res) => {
+    try {
+        const { tc_no, date, check_in_time, check_out_time, project, qr_data, activity, note } = req.body;
+
+        if (!tc_no || !date || !check_in_time || !check_out_time) {
+            return res.status(400).json({ error: 'TC No, Tarih, Giriş Saati ve Çıkış Saati zorunludur.' });
+        }
+
+        if (!isValidTC(tc_no)) {
+            return res.status(400).json({ error: 'Geçersiz TC Kimlik Numarası.' });
+        }
+
+        const tcHash = hashTC(tc_no);
+        const tcEnc = encryptTC(tc_no);
+
+        // İşçi bilgilerini bul
+        const [workerRows] = await pool.execute(
+            'SELECT first_name, last_name FROM workers WHERE tc_hash = ?',
+            [tcHash]
+        );
+
+        let firstName = req.body.first_name ? sanitizeName(req.body.first_name) : '';
+        let lastName = req.body.last_name ? sanitizeName(req.body.last_name) : '';
+
+        if (workerRows && workerRows.length > 0) {
+            firstName = workerRows[0].first_name;
+            lastName = workerRows[0].last_name;
+        } else if (!firstName || !lastName) {
+            // Son kayıtlardan kontrol et
+            const [pastRows] = await pool.execute(
+                'SELECT first_name, last_name FROM attendance_logs WHERE tc_hash = ? ORDER BY id DESC LIMIT 1',
+                [tcHash]
+            );
+            if (pastRows && pastRows.length > 0) {
+                firstName = pastRows[0].first_name;
+                lastName = pastRows[0].last_name;
+            } else {
+                return res.status(400).json({ error: 'Bu TC numarasına ait işçi sistemde bulunamadı. Lütfen önce işçiyi kaydedin veya Ad Soyad girin.' });
+            }
+        }
+
+        // Tarih ve saat formatla: YYYY-MM-DD HH:mm:ss
+        const cleanDate = String(date).trim().slice(0, 10);
+        const cleanInTime = String(check_in_time).trim().includes(':') ? String(check_in_time).trim() : '08:00';
+        const cleanOutTime = String(check_out_time).trim().includes(':') ? String(check_out_time).trim() : '18:00';
+
+        const fullCheckIn = `${cleanDate} ${cleanInTime.length === 5 ? cleanInTime + ':00' : cleanInTime}`;
+        const fullCheckOut = `${cleanDate} ${cleanOutTime.length === 5 ? cleanOutTime + ':00' : cleanOutTime}`;
+
+        const dtIn = new Date(fullCheckIn);
+        const dtOut = new Date(fullCheckOut);
+
+        if (isNaN(dtIn.getTime()) || isNaN(dtOut.getTime())) {
+            return res.status(400).json({ error: 'Geçersiz tarih veya saat formatı.' });
+        }
+
+        if (dtOut < dtIn) {
+            return res.status(400).json({ error: 'Çıkış saati giriş saatinden önce olamaz.' });
+        }
+
+        const durationMinutes = Math.max(0, Math.round((dtOut - dtIn) / 60000));
+        const finalProject = sanitizeName(project || 'ŞÖLEN');
+        const finalSite = sanitizeName(qr_data || 'Merkez Saha');
+        const finalActivity = sanitizeName(activity || 'Saha Çalışması');
+        const finalReason = note ? sanitizeName(note) : 'Manuel Yönetici Girişi';
+
+        // Yönetici manuel kayıt cihazı kaydı (Foreign key uyumluluğu için)
+        await pool.execute(
+            `INSERT IGNORE INTO devices (device_id, first_seen, last_seen, consent_version, blocked, note)
+             VALUES ('DEV-ADMIN-MANUAL', NOW(), NOW(), 1, FALSE, 'Yönetici Manuel Giriş Cihazı')`
+        );
+
+        const [insertRes] = await pool.execute(
+            `INSERT INTO attendance_logs
+             (tc_hash, tc_encrypted, first_name, last_name, qr_data, device_id, activity, project,
+              check_in_time, check_out_time, duration_minutes,
+              location_consent, consent_version, consent_granted_at,
+              is_out_of_bounds, auto_closed, auto_close_reason)
+             VALUES (?, ?, ?, ?, ?, 'DEV-ADMIN-MANUAL', ?, ?, ?, ?, ?, 1, 2, NOW(), FALSE, FALSE, ?)`,
+            [tcHash, tcEnc, firstName, lastName, finalSite, finalActivity, finalProject,
+             fullCheckIn, fullCheckOut, durationMinutes, finalReason]
+        );
+
+        await pool.execute(
+            `INSERT INTO admin_access_log (admin_user, action, record_count, ip, created_at)
+             VALUES (?, ?, 1, ?, NOW())`,
+            [req.admin.user, 'manual_attendance_insert:' + insertRes.insertId, req.ip]
+        );
+
+        res.json({
+            ok: true,
+            message: `${firstName} ${lastName} için ${cleanDate} tarihli günlük puantaj kaydı (${Math.round(durationMinutes / 60 * 10) / 10} saat) başarıyla eklendi.`,
+            id: insertRes.insertId
+        });
+    } catch (err) {
+        console.error('[Manuel Puantaj Ekleme Hata]:', err);
+        res.status(500).json({ error: 'Manuel puantaj kaydı eklenirken hata. Ayrıntılar sunucu kaydında.' });
+    }
 });
 
 /* ---------------- SAP Entegrasyonu Servisleri ---------------- */
@@ -1080,8 +1387,10 @@ app.post('/api/sap/sync', requireSAPOrAdmin, async (req, res) => {
  */
 app.post('/api/sap/al11-export', requireSAPOrAdmin, async (req, res) => {
     try {
-        const targetDir = process.env.SAP_AL11_DIR || req.body.target_dir || path.join(process.cwd(), 'sap_al11_export');
-        const delimiter = req.body.delimiter || '\t';
+        // Hedef dizin YALNIZCA sunucu yapilandirmasindan gelir; istekten alinmaz
+        // (aksi halde istemci sunucuda istedigi klasore dosya yazdirabilirdi).
+        const targetDir = process.env.SAP_AL11_DIR || path.join(process.cwd(), 'sap_al11_export');
+        const delimiter = [';', ',', '|', '\t'].includes(req.body.delimiter) ? req.body.delimiter : '\t';
         const limit = Math.min(Number(req.body.limit) || 2000, 10000);
         const unsyncedOnly = req.body.unsynced_only !== false; // Varsayılan: sadece henüz aktarılmamışlar
 
@@ -1146,7 +1455,7 @@ app.post('/api/sap/al11-export', requireSAPOrAdmin, async (req, res) => {
 
     } catch (err) {
         console.error('[SAP AL11 Export Hata]:', err);
-        res.status(500).json({ error: 'SAP AL11 aktarım hatası: ' + err.message });
+        res.status(500).json({ error: 'SAP AL11 aktarım hatası. Ayrıntılar sunucu kaydında.' });
     }
 });
 
@@ -1166,11 +1475,16 @@ async function enforceRetention() {
              WHERE check_in_time < DATE_SUB(NOW(), INTERVAL 90 DAY)
                AND in_latitude IS NOT NULL`);
 
+        const [histResult] = await pool.execute(
+            `DELETE FROM worker_location_history
+             WHERE recorded_at < DATE_SUB(NOW(), INTERVAL 90 DAY)`);
+
         const [delResult] = await pool.execute(
             `DELETE FROM attendance_logs
              WHERE check_in_time < DATE_SUB(NOW(), INTERVAL 10 YEAR)`);
 
         console.log(`[KVKK] Konum temizlendi: ${locResult.affectedRows}, ` +
+                    `konum gecmisi silindi: ${histResult.affectedRows}, ` +
                     `kayit silindi: ${delResult.affectedRows}`);
     } catch (err) {
         console.error('[KVKK] Saklama gorevi hatasi:', err.message);
@@ -1189,15 +1503,15 @@ async function autoCloseStaleAttendanceLogs() {
     try {
         const [res] = await pool.execute(
             `UPDATE attendance_logs
-             SET check_out_time = CONCAT(DATE(check_in_time), ' 18:00:00'),
-                 duration_minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_time, CONCAT(DATE(check_in_time), ' 18:00:00'))),
+             SET check_out_time = ${AUTO_CLOSE_TIME_SQL},
+                 duration_minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_time, ${AUTO_CLOSE_TIME_SQL})),
                  auto_closed = TRUE,
                  auto_close_reason = 'Akşam Çıkış Unutuldu (Gece Otomatik Kapatıldı)'
              WHERE check_out_time IS NULL
                AND (DATE(check_in_time) < CURDATE() OR (HOUR(NOW()) >= 23 AND DATE(check_in_time) = CURDATE()))`
         );
         if (res.affectedRows > 0) {
-            console.log(`[OTO-KAPANIŞ] ${res.affectedRows} adet unutulmuş açık mesai 18:00 itibarıyla otomatik kapatıldı.`);
+            console.log(`[OTO-KAPANIŞ] ${res.affectedRows} adet unutulmuş açık mesai otomatik kapatıldı.`);
         }
     } catch (err) {
         console.error('[OTO-KAPANIŞ] Hata:', err.message);
@@ -1348,12 +1662,36 @@ async function initDb() {
             console.log("[DB] 'bound_tc_hash' ve 'bound_worker_name' sütunları devices tablosuna eklendi.");
         }
 
+        await pool.execute(`
+            INSERT IGNORE INTO devices (device_id, first_seen, last_seen, consent_version, blocked, note)
+            VALUES ('DEV-ADMIN-MANUAL', NOW(), NOW(), 1, FALSE, 'Yönetici Manuel Giriş Cihazı')
+        `);
+
         // Gece Otomatik Mesai Kapanış Sütunları
         const [autoCloseCols] = await pool.execute("SHOW COLUMNS FROM attendance_logs LIKE 'auto_closed'");
         if (!autoCloseCols || autoCloseCols.length === 0) {
             await pool.execute("ALTER TABLE attendance_logs ADD COLUMN auto_closed BOOLEAN NOT NULL DEFAULT FALSE, ADD COLUMN auto_close_reason VARCHAR(100) NULL");
             console.log("[DB] 'auto_closed' ve 'auto_close_reason' sütunları attendance_logs tablosuna eklendi.");
         }
+
+        // SAP senkron kolonlari (eski kurulumlarda eksik olabilir)
+        const [sapCols] = await pool.execute("SHOW COLUMNS FROM attendance_logs LIKE 'sap_synced'");
+        if (!sapCols || sapCols.length === 0) {
+            await pool.execute("ALTER TABLE attendance_logs ADD COLUMN sap_synced TINYINT(1) NOT NULL DEFAULT 0, ADD COLUMN sap_synced_at DATETIME NULL");
+            console.log("[DB] 'sap_synced' ve 'sap_synced_at' sütunları attendance_logs tablosuna eklendi.");
+        }
+
+        await pool.execute(`
+            CREATE TABLE IF NOT EXISTS admin_access_log (
+                id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+                admin_user    VARCHAR(50)  NOT NULL,
+                action        VARCHAR(100) NOT NULL,
+                record_count  INT          NOT NULL DEFAULT 0,
+                ip            VARCHAR(45)  NULL,
+                created_at    DATETIME     NOT NULL,
+                INDEX idx_created (created_at)
+            ) ENGINE=InnoDB;
+        `);
 
         await pool.execute(`
             CREATE TABLE IF NOT EXISTS workers (

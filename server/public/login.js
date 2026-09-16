@@ -12,9 +12,15 @@
         const btn = el('btn-login');
         const user = el('username').value.trim();
         const pass = el('password').value;
+        const pinField = el('pin-field');
+        const pin = el('pin') ? el('pin').value.trim() : '';
 
         if (!user || !pass) {
             showError('Kullanıcı adı ve şifre giriniz.');
+            return;
+        }
+        if (pinField && !pinField.hidden && !pin) {
+            showError('Güvenlik PIN kodunu giriniz.');
             return;
         }
 
@@ -30,7 +36,7 @@
                     'Content-Type': 'application/json',
                     'X-CSRF-Token': meta ? meta.content : ''
                 },
-                body: JSON.stringify({ username: user, password: pass })
+                body: JSON.stringify({ username: user, password: pass, pin: pin })
             });
 
             if (res.ok) {
@@ -53,5 +59,14 @@
         el('password').addEventListener('keydown', e => {
             if (e.key === 'Enter') login();
         });
+        if (el('pin')) el('pin').addEventListener('keydown', e => {
+            if (e.key === 'Enter') login();
+        });
+
+        // Sunucuda PIN tanimliysa PIN alanini goster.
+        fetch('/api/admin/login-config', { credentials: 'include' })
+            .then(r => r.ok ? r.json() : {})
+            .then(cfg => { if (cfg && cfg.pin_required) el('pin-field').hidden = false; })
+            .catch(() => {});
     });
 })();

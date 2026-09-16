@@ -7,7 +7,9 @@
  *  - Sunucu adresi koda gomulu degil; config.js'ten (build sirasinda uretilir) okunur.
  *  - inline onclick yok (CSP uyumu), tum olaylar addEventListener ile.
  *  - TC No algoritmik olarak dogrulaniyor.
- *  - Konum: sadece riza varsa, sadece islem aninda, tek seferlik.
+ *  - Konum: sadece riza varsa; giris/cikis aninda ve acik mesai boyunca
+ *    (18:00'e kadar) 15 dakikada bir. Riza yoksa konum hic istenmez.
+ *  - TC No cihazda SAKLANMAZ (yalnizca ad-soyad hatirlanir).
  */
 (function () {
     'use strict';
@@ -56,8 +58,6 @@
      */
     function isValidTC(value) {
         if (!/^[1-9][0-9]{10}$/.test(value)) return false;
-        // Test kolayligi: 11111111111 gibi ayni rakam tekrarlarina test icin izin ver
-        if (/^(\d)\1{10}$/.test(value)) return true;
         const d = value.split('').map(Number);
         const oddSum  = d[0] + d[2] + d[4] + d[6] + d[8];
         const evenSum = d[1] + d[3] + d[5] + d[7];
@@ -107,47 +107,246 @@
 
     /* ---------------- Konum ---------------- */
 
+    // Android WebView Mojo BarcodeDetector NPE çökmesini önlemek için devre dışı bırak
+    try {
+        if ('BarcodeDetector' in window) {
+            delete window.BarcodeDetector;
+        }
+    } catch (e) {}
+
+    /* ---------------- Konum ---------------- */
+
+    let cachedLocation = null;
+    let cachedLocationTime = 0;
+    let locationWatchId = null;
+    let lastLocationError = null;
+
+    function formatPosition(pos) {
+        if (!pos || !pos.coords) return null;
+        return {
+            latitude: round6(pos.coords.latitude),
+            longitude: round6(pos.coords.longitude),
+            accuracy_m: pos.coords.accuracy != null ? Math.round(pos.coords.accuracy) : null,
+            captured_at: new Date(pos.timestamp || Date.now()).toISOString()
+        };
+    }
+
     /**
-     * Tek seferlik konum alir. Riza yoksa hic denemez.
-     * Reddedilme veya zaman asimi islemi DURDURMAZ - konumsuz devam eder.
+     * watchPosition ile cihazın konum servisini sürekli sıcak tutar.
+     * Cihaz şebeke, Wi-Fi veya GPS üzerinden bir konum yakaladığında anında cachedLocation'a yazar.
+     */
+    function startLocationWatcher() {
+        if (!Consent.allowsLocation() || !navigator.geolocation) return;
+        if (locationWatchId !== null) return;
+
+        try {
+            locationWatchId = navigator.geolocation.watchPosition(
+                pos => {
+                    const formatted = formatPosition(pos);
+                    if (formatted) {
+                        cachedLocation = formatted;
+                        cachedLocationTime = Date.now();
+                        lastLocationError = null;
+                        console.log('watchPosition güncel konum aldı:', formatted);
+                    }
+                },
+                err => {
+                    lastLocationError = err;
+                    console.warn('watchPosition bildirimi:', err.message || err.code);
+                },
+                { enableHighAccuracy: false, maximumAge: 300000, timeout: 20000 }
+            );
+        } catch(e) {
+            console.warn('watchPosition başlatılamadı:', e);
+        }
+    }
+
+    /**
+     * Uygulama açılır açılmaz veya rıza verildiğinde konumu arka planda hazırlamaya başlar.
+     */
+    function warmupLocation() {
+        if (!Consent.allowsLocation()) return;
+        startLocationWatcher();
+
+        // Ayrıca hemen bir hızlı sorgu atarak önbelleği doldur
+        if (navigator.geolocation && (!cachedLocation || (Date.now() - cachedLocationTime > 300000))) {
+            try {
+                navigator.geolocation.getCurrentPosition(
+                    pos => {
+                        const formatted = formatPosition(pos);
+                        if (formatted) {
+                            cachedLocation = formatted;
+                            cachedLocationTime = Date.now();
+                            lastLocationError = null;
+                        }
+                    },
+                    () => {},
+                    { enableHighAccuracy: false, maximumAge: 900000, timeout: 4000 }
+                );
+            } catch(e) {}
+        }
+    }
+
+    let backgroundLocationPromise = null;
+
+    /**
+     * Kullanıcı Giriş/Çıkış butonuna bastığı an veya formdayken arka planda konumu paralel sorgulamaya başlar.
+     * Böylece QR okutulduğunda konum çoktan hazır olur!
+     */
+    function startLocationCaptureInBackground() {
+        if (!Consent.allowsLocation() || !navigator.geolocation) return;
+        if (cachedLocation && (Date.now() - cachedLocationTime < 300000)) return;
+
+        backgroundLocationPromise = new Promise(resolve => {
+            let done = false;
+            const timer = setTimeout(() => {
+                if (!done) {
+                    done = true;
+                    resolve(cachedLocation || null);
+                }
+            }, 10000);
+
+            const onLoc = pos => {
+                if (done) return;
+                done = true;
+                clearTimeout(timer);
+                const formatted = formatPosition(pos);
+                if (formatted) {
+                    cachedLocation = formatted;
+                    cachedLocationTime = Date.now();
+                    lastLocationError = null;
+                    console.log('Arka plan konum hazır:', formatted);
+                }
+                resolve(formatted || cachedLocation || null);
+            };
+
+            const onErr = err => {
+                lastLocationError = err;
+                console.warn('Arka plan konum denemesi hatası:', err.message || err.code);
+            };
+
+            // 1. Ağ / Wi-Fi / Önbellek konumu (hızlı)
+            try {
+                navigator.geolocation.getCurrentPosition(
+                    onLoc,
+                    onErr,
+                    { enableHighAccuracy: false, timeout: 6000, maximumAge: 900000 }
+                );
+            } catch(e) {}
+
+            // 2. GPS Hassas konum (paralel)
+            try {
+                navigator.geolocation.getCurrentPosition(
+                    onLoc,
+                    onErr,
+                    { enableHighAccuracy: true, timeout: 9500, maximumAge: 60000 }
+                );
+            } catch(e) {}
+        });
+    }
+
+    /**
+     * Tek seferlik konum alir.
+     * 1. Son 10 dakika içindeki önbellek varsa ANINDA (0 ms) döner.
+     * 2. Arka planda devam eden sorgu varsa sonucunu bekler.
+     * 3. Hem Şebeke/Wi-Fi hem de GPS uydularını PARALEL olarak sorgular; hangisi önce gelirse alır.
      * @returns {Promise<object|null>}
      */
-    function captureLocation() {
-        if (!Consent.allowsLocation()) return Promise.resolve(null);
-        if (!navigator.geolocation) return Promise.resolve(null);
+    async function captureLocation() {
+        if (!Consent.allowsLocation()) return null;
 
-        // Android izni yoksa once native dialogu tetikle.
-        if (window.AndroidBridge && !AndroidBridge.hasLocationPermission()) {
-            return new Promise(resolve => {
-                let settled = false;
-                const finish = granted => {
-                    if (settled) return;
-                    settled = true;
-                    resolve(granted ? readPosition() : null);
-                };
-                window.NativeEvents.onLocationPermissionGranted = () => finish(true);
-                window.NativeEvents.onLocationPermissionDenied  = () => finish(false);
-                AndroidBridge.requestLocationPermission();
-                setTimeout(() => finish(false), 20000);
-            }).then(v => v);
+        // 1. Son 10 dakika içinde alınmış geçerli konum varsa hiç bekleme, anında döndür!
+        if (cachedLocation && (Date.now() - cachedLocationTime < 600000)) {
+            console.log('Önbellekteki güncel konum kullanıldı:', cachedLocation);
+            return cachedLocation;
         }
-        return readPosition();
+
+        // Android native izni henüz verilmemişse, kullanıcıdan izni iste ve yanıtı bekle
+        if (window.AndroidBridge && !AndroidBridge.hasLocationPermission()) {
+            setStatus('Lütfen ekranda açılan konum iznini onaylayın…', 'info');
+            const granted = await new Promise(resolve => {
+                let done = false;
+                window.NativeEvents = window.NativeEvents || {};
+                window.NativeEvents.onLocationPermissionGranted = () => {
+                    if (!done) { done = true; resolve(true); }
+                };
+                window.NativeEvents.onLocationPermissionDenied = () => {
+                    if (!done) { done = true; resolve(false); }
+                };
+                AndroidBridge.requestLocationPermission();
+                setTimeout(() => { if (!done) { done = true; resolve(false); } }, 10000);
+            });
+            if (!granted) {
+                lastLocationError = { code: 1, message: 'İzin reddedildi' };
+                console.warn('Konum izni kullanıcı tarafından verilmedi');
+                return null;
+            }
+        }
+
+        if (!navigator.geolocation) return null;
+
+        // Arka planda devam eden bir sorgu varsa önce onu bekle
+        if (backgroundLocationPromise) {
+            const bgRes = await Promise.race([
+                backgroundLocationPromise,
+                new Promise(r => setTimeout(() => r(null), 5000))
+            ]);
+            if (bgRes) return bgRes;
+        }
+
+        return new Promise(resolve => {
+            let done = false;
+            const timer = setTimeout(() => {
+                if (!done) {
+                    done = true;
+                    if (cachedLocation) {
+                        resolve(cachedLocation);
+                    } else {
+                        lastLocationError = lastLocationError || { code: 3, message: 'Zaman aşımı (Konum servisi yanıt vermedi)' };
+                        console.warn('Konum alma zaman aşımına uğradı');
+                        resolve(null);
+                    }
+                }
+            }, 10000);
+
+            const finish = loc => {
+                if (done) return;
+                done = true;
+                clearTimeout(timer);
+                if (loc) {
+                    cachedLocation = loc;
+                    cachedLocationTime = Date.now();
+                    lastLocationError = null;
+                }
+                resolve(loc || cachedLocation || null);
+            };
+
+            const onErr = err => {
+                lastLocationError = err;
+                console.warn('Konum alma hatası:', err.message || err.code);
+            };
+
+            // PARALEL SORGULAMA: Ağ ve GPS aynı anda çalışır, hangisi önce biterse o kazanır!
+            try {
+                navigator.geolocation.getCurrentPosition(
+                    pos => finish(formatPosition(pos)),
+                    onErr,
+                    { enableHighAccuracy: false, timeout: 6000, maximumAge: 900000 }
+                );
+            } catch(e) {}
+
+            try {
+                navigator.geolocation.getCurrentPosition(
+                    pos => finish(formatPosition(pos)),
+                    onErr,
+                    { enableHighAccuracy: true, timeout: 9500, maximumAge: 60000 }
+                );
+            } catch(e) {}
+        });
     }
 
     function readPosition() {
-        return new Promise(resolve => {
-            navigator.geolocation.getCurrentPosition(
-                pos => resolve({
-                    latitude:  round6(pos.coords.latitude),
-                    longitude: round6(pos.coords.longitude),
-                    accuracy_m: pos.coords.accuracy != null
-                        ? Math.round(pos.coords.accuracy) : null,
-                    captured_at: new Date(pos.timestamp).toISOString()
-                }),
-                () => resolve(null),
-                { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-            );
-        });
+        return captureLocation();
     }
 
     /** ~10 cm hassasiyet yeterli; gereksiz basamak saklamiyoruz (veri minimizasyonu). */
@@ -161,6 +360,9 @@
         const form = validateForm(mode);
         if (!form) return;
 
+        // Kamera açıldığı andan itibaren arka planda konum almaya başla
+        startLocationCaptureInBackground();
+
         if (window.AndroidBridge && !AndroidBridge.hasCameraPermission()) {
             setStatus('Kamera izni isteniyor…', 'info');
         }
@@ -172,7 +374,7 @@
                 mode === 'in' ? 'Giriş — saha QR kodunu okutun'
                               : 'Çıkış — saha QR kodunu okutun';
         }
-        el('scanner-hint').textContent = 'QR kodu çerçevenin içine hizalayın';
+        el('scanner-hint').textContent = 'QR kodu kameraya gösterin (tüm ekran taranır)';
         el('scanner-hint').style.color = '#fff';
         show('scanner');
         setStatus('');
@@ -184,19 +386,17 @@
             await new Promise(r => setTimeout(r, 150));
 
             scanner = new Html5Qrcode('reader', {
+                formatsToSupport: [ 0 ], // 0 = QR_CODE (Html5QrcodeSupportedFormats.QR_CODE). Sadece QR tarayarak 10 kat hızlandırır!
                 verbose: false,
                 experimentalFeatures: {
-                    useBarCodeDetectorIfSupported: true
+                    useBarCodeDetectorIfSupported: false // Mojo çökmesini önlemek için kesinlikle false
                 }
             });
 
+            // qrbox kaldırıldı: Kamera tüm kadrajı tarayacak, böylece QR kod kadrajın neresinde olursa olsun anında yakalanır!
             const qrConfig = {
-                fps: 10,
-                qrbox: function(viewfinderWidth, viewfinderHeight) {
-                    const minEdge = Math.min(viewfinderWidth || 300, viewfinderHeight || 300);
-                    const size = Math.max(160, Math.floor(minEdge * 0.7));
-                    return { width: size, height: size };
-                }
+                fps: 15,
+                disableFlip: false
             };
 
             scanning = true;
@@ -217,33 +417,84 @@
                     () => {}
                 );
             }
+
+            // Sürekli otomatik odaklama (continuous autofocus) kısıtlamasını uygula
+            try {
+                const videoEl = document.querySelector('#reader video');
+                if (videoEl && videoEl.srcObject && typeof videoEl.srcObject.getVideoTracks === 'function') {
+                    const tracks = videoEl.srcObject.getVideoTracks();
+                    if (tracks.length > 0) {
+                        const track = tracks[0];
+                        const caps = track.getCapabilities ? track.getCapabilities() : {};
+                        if (caps.focusMode && caps.focusMode.includes('continuous')) {
+                            track.applyConstraints({
+                                advanced: [{ focusMode: 'continuous' }]
+                            }).catch(() => {});
+                        }
+                    }
+                }
+            } catch(afErr) {}
         } catch (err) {
             console.error('Kamera baslatma hatasi:', err);
             scanning = false;
             if (el('scanner-hint')) {
-                el('scanner-hint').innerHTML = '⚠️ Kamera açılamadı: <br><small>' + (err.message || err) + '</small><br>Aşağıdaki <b>"Kodu Elle Gir"</b> butonunu kullanabilirsiniz.';
+                el('scanner-hint').textContent = '⚠️ Kamera açılamadı: ' + (err.message || err) + ' — Aşağıdaki "Kodu Elle Gir" butonunu kullanabilirsiniz.';
                 el('scanner-hint').style.color = '#ffbaba';
             }
         }
     }
 
     async function stopScanner() {
+        scanning = false;
         if (scanner) {
             try {
-                if (scanning) {
-                    await scanner.stop();
+                scanner.shouldScan = false;
+                if (scanner.foreverScanTimeout) {
+                    clearTimeout(scanner.foreverScanTimeout);
+                    scanner.foreverScanTimeout = null;
                 }
-            } catch (e) {
-                console.warn('Scanner stop warn:', e);
-            }
+            } catch (e) {}
+
             try {
-                scanner.clear();
-            } catch (e) {
-                console.warn('Scanner clear warn:', e);
-            }
+                const videos = document.querySelectorAll('#reader video');
+                videos.forEach(v => {
+                    try {
+                        if (v.srcObject && typeof v.srcObject.getTracks === 'function') {
+                            v.srcObject.getTracks().forEach(t => {
+                                try { t.stop(); } catch(te) {}
+                            });
+                        }
+                        v.pause();
+                        v.srcObject = null;
+                    } catch(ve) {}
+                });
+            } catch (e) {}
+
+            try {
+                if (scanner.renderedCamera) {
+                    if (scanner.renderedCamera.mediaStream) {
+                        scanner.renderedCamera.mediaStream.getTracks().forEach(t => {
+                            try { t.stop(); } catch(te) {}
+                        });
+                    }
+                    scanner.renderedCamera.close().catch(() => {});
+                    scanner.renderedCamera = null;
+                }
+            } catch (e) {}
+
+            try {
+                if (typeof scanner.stop === 'function') {
+                    await scanner.stop().catch(() => {});
+                }
+            } catch (e) {}
+
+            try {
+                const r = el('reader');
+                if (r) r.innerHTML = '';
+            } catch (e) {}
+
             scanner = null;
         }
-        scanning = false;
     }
 
     async function onScanSuccess(decodedText) {
@@ -251,31 +502,28 @@
         busy = true;
 
         try {
-            // 1. Taramayı dondur (pause) - Kesinlikle hemen stop() ve clear() çağırma,
-            // çünkü video karesi işlenirken donanımı aniden sökmek Chromium'u çökertir (SIGSEGV)!
-            try {
-                if (scanner) {
-                    scanner.pause(true);
-                }
-            } catch (pErr) {
-                console.warn('Scanner pause uyari:', pErr);
+            console.log('QR kod basariyla okundu:', decodedText);
+
+            // Legacy Shift-JIS kurtarma
+            let cleanText = String(decodedText || '').trim();
+            if (cleanText.includes('ｿﾅ淌') || cleanText.includes('ﾅ淌ｶ') || cleanText.includes('淌ｶ')) {
+                cleanText = 'şölen';
             }
+
+            // 1. Oncelikle kamerayi ve tarama dongusunu tamamen temiz durdur
+            await stopScanner();
 
             // 2. Ekranı hemen form görünümüne al
             show('form');
-            setStatus('QR kod okundu, kayıt hazırlanıyor…', 'info');
+            setStatus('QR kod okundu, kayıt gönderiliyor…', 'info');
 
             // 3. Sunucuya gönderimi tamamla
-            await submitAction(decodedText);
+            await submitAction(cleanText);
         } catch (err) {
             console.error('Scan success error:', err);
             setStatus('İşlem hatası: ' + (err.message || err), 'error');
         } finally {
             busy = false;
-            // 4. Kamerayı UI ve işlem bittikten sonra güvenli bir gecikmeyle kapat
-            setTimeout(async () => {
-                await stopScanner();
-            }, 1200);
         }
     }
 
@@ -285,7 +533,7 @@
         const form = validateForm(currentMode);
         if (!form) return;
 
-        setStatus('Konum ve kayıt hazırlanıyor…', 'info');
+        setStatus('Konum alınıyor, lütfen bekleyin…', 'info');
         let location = null;
         try {
             location = await captureLocation();
@@ -293,8 +541,21 @@
             console.warn('Konum alma atlandı:', locErr);
         }
 
-        if (Consent.allowsLocation() && !location) {
-            setStatus('Konum alınamadı — kayıt konumsuz gönderiliyor…', 'warn');
+        if (location) {
+            setStatus('Konum alındı, kayıt gönderiliyor…', 'info');
+        } else if (Consent.allowsLocation()) {
+            const errDetail = lastLocationError ? (' (' + (lastLocationError.message || ('Hata ' + lastLocationError.code)) + ')') : '';
+            const proceed = confirm(
+                '⚠️ Cihaz Konumu Alınamadı' + errDetail + '!\n\n' +
+                'Telefonunuzun üst bildirim menüsünden "Konum" (GPS) servisinin AÇIK olduğundan emin olunuz.\n\n' +
+                '• TAMAM: Konum eklemeden işleme devam et\n' +
+                '• İPTAL: Geri dön, telefonun konumunu açıp tekrar dene'
+            );
+            if (!proceed) {
+                setStatus('Lütfen telefonunuzun Konum servisini açıp işlemi tekrarlayın.', 'warn');
+                return;
+            }
+            setStatus('Kayıt konumsuz gönderiliyor…', 'warn');
         }
 
         const payload = {
@@ -312,27 +573,62 @@
 
         const path = currentMode === 'in' ? '/api/check-in' : '/api/check-out';
 
+        try {
+            setStatus('Gönderiliyor…', 'info');
+            const res = await Api.post(path, payload);
+            if (res.ok) {
+                const label = currentMode === 'in' ? 'Giriş' : 'Çıkış';
+                setStatus((res.body.message || (label + ' kaydedildi.')) +
+                    (location ? ' (konum eklendi)' : ' (konumsuz)'), 'success');
+                // Basarili islem sonrası bilgileri hatırla
+                saveSavedWorker(form.first_name, form.last_name);
+
+                if (currentMode === 'in') {
+                    startPeriodicLocationPing();
+                } else {
+                    stopPeriodicLocationPing();
+                }
+
+                if (res.body.birthday_message) {
+                    showBirthdayModal(res.body.birthday_message);
+                }
+            } else {
+                setStatus(res.body.message || res.body.error || 'İşlem reddedildi.', 'error');
+            }
+        } catch (err) {
+            const errMsg = (err && err.message) ? err.message : String(err);
+            setStatus('İşlem Hatası: ' + errMsg, 'error');
+        }
+    }
+
+    /* ---------------- Mesai ici periyodik konum ---------------- */
+
+    // Modul seviyesinde tutulur: onceden submitAction icinde tanimli oldugu icin
+    // cikis yapildiginda onceki zamanlayici durdurulamiyor, konum alinmaya devam ediyordu.
     let locationPingTimer = null;
 
-    function startPeriodicLocationPing(tcNo) {
+    function startPeriodicLocationPing() {
         stopPeriodicLocationPing();
         if (!Consent.allowsLocation()) return;
 
         locationPingTimer = setInterval(async () => {
             try {
-                // Saat 18:00 ve sonrasında çalışan çıkış yapmayı unutsa bile konum takibi OTOMATİK KAPANIR
-                const currentHour = new Date().getHours();
-                if (currentHour >= 18) {
+                // Rıza sonradan kapatıldıysa veya saat 18:00 olduysa takip durur.
+                if (!Consent.allowsLocation() || new Date().getHours() >= 18) {
                     stopPeriodicLocationPing();
                     return;
                 }
 
                 const loc = await captureLocation();
                 if (loc) {
-                    await Api.post('/api/location-ping', {
-                        tc_no: tcNo,
-                        location: loc
+                    // Kimlik gonderilmez; sunucu cihazin bagli oldugu isciyi kullanir.
+                    const res = await Api.post('/api/location-ping', {
+                        location: loc,
+                        consent: Consent.proof()
                     });
+                    if (res.ok && res.body && res.body.ok === false) {
+                        stopPeriodicLocationPing(); // acik mesai yok / riza yok
+                    }
                 }
             } catch (e) {}
         }, 15 * 60 * 1000); // 15 dakikada 1
@@ -345,40 +641,13 @@
         }
     }
 
-    try {
-        setStatus('Gönderiliyor…', 'info');
-        const res = await Api.post(path, payload);
-        if (res.ok) {
-            const label = currentMode === 'in' ? 'Giriş' : 'Çıkış';
-            setStatus((res.body.message || (label + ' kaydedildi.')) +
-                (location ? ' (konum eklendi)' : ' (konumsuz)'), 'success');
-            // Basarili islem sonrası bilgileri hatırla
-            saveSavedWorker(form.tc_no, form.first_name, form.last_name);
-
-            if (currentMode === 'in') {
-                startPeriodicLocationPing(form.tc_no);
-            } else {
-                stopPeriodicLocationPing();
-            }
-
-            if (res.body.birthday_message) {
-                showBirthdayModal(res.body.birthday_message);
-            }
-        } else {
-            setStatus(res.body.message || res.body.error || 'İşlem reddedildi.', 'error');
-        }
-    } catch (err) {
-        const errMsg = (err && err.message) ? err.message : String(err);
-        setStatus('İşlem Hatası: ' + errMsg, 'error');
-    }
-}
-
     /* ---------------- Riza akisi ---------------- */
 
     function refreshConsentGate() {
         const core = el('consent-core');
         const loc = el('consent-location');
-        el('btn-consent-accept').disabled = !(core && core.checked && loc && loc.checked);
+        // Konum rizasi ISTEGE BAGLIDIR; yalnizca aydinlatma onayi zorunlu.
+        el('btn-consent-accept').disabled = !(core && core.checked);
     }
 
     function renderConsentStatus() {
@@ -392,9 +661,10 @@
         }
     }
 
-    function saveSavedWorker(tc, first, last) {
+    function saveSavedWorker(first, last) {
         try {
-            if (tc) localStorage.setItem('erkiz_saved_tc', tc);
+            // KVKK: TC No cihazda duz metin olarak saklanmaz.
+            localStorage.removeItem('erkiz_saved_tc');
             if (first) localStorage.setItem('erkiz_saved_first', first);
             if (last) localStorage.setItem('erkiz_saved_last', last);
         } catch(e) {}
@@ -402,10 +672,10 @@
 
     function loadSavedWorker() {
         try {
-            const tc = localStorage.getItem('erkiz_saved_tc');
+            // Eski surumlerden kalan kayitli TC'yi temizle.
+            localStorage.removeItem('erkiz_saved_tc');
             const first = localStorage.getItem('erkiz_saved_first');
             const last = localStorage.getItem('erkiz_saved_last');
-            if (tc && el('tc_no')) el('tc_no').value = tc;
             if (first && el('first_name')) el('first_name').value = first;
             if (last && el('last_name')) el('last_name').value = last;
         } catch(e) {}
@@ -447,7 +717,7 @@
             const banner = document.createElement('div');
             banner.id = 'project-network-banner';
             banner.style.cssText = 'font-size:0.78rem; color:#d9534f; margin-top:5px; line-height:1.4; background:rgba(217,83,79,0.08); padding:6px 8px; border-radius:6px; border:1px solid rgba(217,83,79,0.2);';
-            const currentBase = Api.base();
+            const currentBase = String(Api.base()).replace(/[<>&"']/g, '');
             banner.innerHTML = `⚠️ Sunucuya bağlanılamadı: <strong>${currentBase}</strong><br>` +
                 `<div style="margin-top:4px; display:flex; gap:10px;">` +
                 `<a href="#" id="link-retry-projects" style="color:#007AFF; font-weight:600; text-decoration:underline;">🔄 Tekrar Dene</a>` +
@@ -468,9 +738,10 @@
 
     function promptChangeServer() {
         const current = Api.base();
-        const entered = prompt('Sunucu Adresini Giriniz\n(Örn: http://10.15.2.64:3000 veya https://...):', current);
+        const entered = prompt('Sunucu Adresini Giriniz\n(Örn: https://www.erkiztakip.com):', current);
         if (entered !== null && entered.trim()) {
-            Api.setServerUrl(entered.trim());
+            const r = Api.setServerUrl(entered.trim());
+            if (!r.ok) { alert(r.error); return; }
             alert('Sunucu adresi güncellendi: ' + Api.base());
             loadProjects();
         }
@@ -498,6 +769,14 @@
         if (Consent.hasCore()) {
             show('form');
             renderConsentStatus();
+            if (Consent.allowsLocation()) {
+                if (window.AndroidBridge && !AndroidBridge.hasLocationPermission()) {
+                    setTimeout(() => {
+                        try { AndroidBridge.requestLocationPermission(); } catch(e) {}
+                    }, 500);
+                }
+                warmupLocation();
+            }
         } else {
             show('consent');
         }
@@ -510,11 +789,20 @@
         if (el('consent-location')) el('consent-location').addEventListener('change', refreshConsentGate);
 
         el('btn-consent-accept').addEventListener('click', function () {
-            if (!el('consent-core').checked || !el('consent-location').checked) return;
-            Consent.save(true, true);
+            if (!el('consent-core').checked) return;
+            const locationOk = !!el('consent-location').checked;
+            Consent.save(true, locationOk);
             show('form');
             renderConsentStatus();
             loadProjects();
+            if (locationOk) {
+                if (window.AndroidBridge && !AndroidBridge.hasLocationPermission()) {
+                    setTimeout(() => {
+                        try { AndroidBridge.requestLocationPermission(); } catch(e) {}
+                    }, 300);
+                }
+                warmupLocation();
+            }
         });
 
         el('btn-checkin').addEventListener('click', () => startScanner('in'));
@@ -549,13 +837,25 @@
 
         el('btn-settings-back').addEventListener('click', function () {
             Consent.setLocation(el('setting-location').checked);
+            if (!Consent.allowsLocation()) {
+                stopPeriodicLocationPing();
+                if (locationWatchId !== null && navigator.geolocation) {
+                    try { navigator.geolocation.clearWatch(locationWatchId); } catch (e) {}
+                    locationWatchId = null;
+                }
+                cachedLocation = null;
+            }
             renderConsentStatus();
             show('form');
         });
 
         el('btn-revoke-all').addEventListener('click', function () {
             if (!confirm('Tüm rızanızı geri almak istediğinize emin misiniz? ' +
-                         'Uygulamayı kullanmak için tekrar onay vermeniz gerekecek.')) return;
+                         'Uygulamayı kullanmak için tekrar onay vermeniz gerekecek. ' +
+                         'Cihaz kimliğiniz de silineceği için tekrar giriş yapabilmeniz için ' +
+                         'yöneticinizin telefon kilidini kaldırması gerekecektir.')) return;
+            stopPeriodicLocationPing();
+            try { localStorage.removeItem('erkiz_saved_first'); localStorage.removeItem('erkiz_saved_last'); } catch (e) {}
             Consent.revokeAll();
             el('consent-core').checked = false;
             el('consent-location').checked = false;
@@ -568,11 +868,11 @@
             e.target.value = e.target.value.replace(/\D/g, '').slice(0, 11);
         });
 
-        // Bilgiler degistikce cihaza otomatik kaydet
-        ['tc_no', 'first_name', 'last_name'].forEach(id => {
+        // Ad-soyad degistikce cihaza otomatik kaydet (TC kaydedilmez)
+        ['first_name', 'last_name'].forEach(id => {
             if (el(id)) {
                 el(id).addEventListener('change', function () {
-                    saveSavedWorker(el('tc_no').value.trim(), el('first_name').value.trim(), el('last_name').value.trim());
+                    saveSavedWorker(el('first_name').value.trim(), el('last_name').value.trim());
                 });
             }
         });
@@ -589,7 +889,8 @@
             el('btn-save-server').addEventListener('click', function () {
                 const input = el('setting-server-url');
                 if (input && input.value.trim()) {
-                    Api.setServerUrl(input.value.trim());
+                    const r = Api.setServerUrl(input.value.trim());
+                    if (!r.ok) { alert(r.error); return; }
                     alert('Sunucu adresi kaydedildi: ' + Api.base());
                     loadProjects();
                 }

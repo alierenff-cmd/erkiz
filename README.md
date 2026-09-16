@@ -1,6 +1,36 @@
-# Erkiz Mühendislik — İşçi Takip Sistemi v2.0
+# Erkiz Mühendislik — İşçi Takip Sistemi v2.3
 
 QR kod tabanlı saha giriş-çıkış takibi. Android (WebView) istemci + Node.js/MySQL sunucu.
+
+---
+
+## v2.3 güvenlik düzeltmeleri (Eylül 2026)
+
+| Sorun | Düzeltme |
+|---|---|
+| TC listesi (scratch_seed, temp zip) ve TLS anahtarı git'teydi | `.gitignore` genişletildi, `GitGizliVeriTemizle.bat` ile takipten ve geçmişten silinir |
+| `docker-compose.yml` içinde açık şifreler ve `PIN=123456` | Tüm gizli değerler `.env`'den okunur (`docker-env.example`) |
+| Admin PIN tanımlıydı ama hiç sorulmuyordu | Giriş ekranında PIN zorunlu (`ADMIN_SECURITY_PIN` doluysa) |
+| Release APK'da HTTP açık, mixed content serbest, WebView debug açık | Release'de HTTP/mixed content/debug kapalı; HTTP yalnızca debug APK'da (`app/src/debug`) |
+| Uygulamadan herhangi bir `http://` sunucu adresi girilebiliyordu | Release APK yalnızca `https://` kabul eder |
+| TC No telefonda düz metin saklanıyordu | TC saklanmaz; eski kayıt açılışta silinir (ad-soyad hatırlanır) |
+| Konum rızası "isteğe bağlı" denmesine rağmen zorunluydu | Gerçekten isteğe bağlı; rıza sürümü 3'e çıktı (herkesten yeniden onay alınır) |
+| 15 dk konum takibi aydınlatma metninde yoktu | Metne eklendi; rıza kapatılınca takip anında durur |
+| `/api/location-ping` her seferinde 500 dönüyordu (fonksiyon kapsam hatası) | Düzeltildi; rıza + cihaz-işçi eşleşmesi kontrol edilir, TC istemciden alınmaz |
+| Çıkış yapınca konum zamanlayıcısı durmuyordu | Düzeltildi |
+| Yeni cihaz kimliği üretilerek cihaz kilidi atlatılabiliyordu | Bir TC yalnızca kilitli olduğu telefondan işlem yapar; panelde "Cihaz Kilitleri" bölümü |
+| Puantaja telefonda yazılan ad-soyad yazılıyordu | İK kaydındaki (workers) ad-soyad yazılır |
+| CORS `*`, HSTS kapalı, login limiti 100 | CORS izin listesi, HSTS açık, login 8/15 dk |
+| SAP AL11 hedef klasörü istekten alınabiliyordu | Yalnızca `SAP_AL11_DIR` |
+| Hata mesajları iç hata ayrıntısını dışarı veriyordu | Genel mesaj; ayrıntı sunucu logunda |
+| 18:00 sonrası girişlerin unutulan çıkışı 0 dk yazılıyordu | 18:00 sonrası girişler 23:59'da kapanır |
+| Admin panelinde proje/saha adlarında XSS | Kaçışlanıyor |
+| `schema.sql` eksik tablolar içeriyordu | `server.js` ile birebir güncellendi |
+| `seed_workers.js` farklı hash üretiyordu | Devre dışı; `reseed_workers.js` kullanın |
+| Konum geçmişi (15 dk sinyaller) hiç silinmiyordu | 90 gün sonra silinir |
+
+**Bilinen davranış değişikliği:** Uygulamayı silip yeniden kuran veya telefon değiştiren işçi,
+yönetici panelinden eski cihazın kilidi kaldırılana kadar giriş yapamaz.
 
 ---
 
@@ -19,18 +49,18 @@ QR kod tabanlı saha giriş-çıkış takibi. Android (WebView) istemci + Node.j
 | Sabit `loca.lt` tünel adresi | `BuildConfig` üzerinden yapılandırılabilir domain |
 | CDN'den `html5-qrcode` | Yerel `vendor/` klasörü |
 | TC No düz metin | HMAC hash (arama) + AES-256-GCM (saklama), panelde maskeli |
-| Rate limit yok | Login 8/15dk, işlem 10/dk, cihaz kaydı 20/saat |
+| Rate limit yok | Login 8/15dk, işlem 10/dk, cihaz kaydı 20/saat (v2.3'te düzeltildi) |
 | Admin şifresi belirsiz | scrypt (Node çekirdeği), `.env`'den |
 | `allowBackup="true"` | Kapatıldı, yedek kuralları kişisel veriyi dışlıyor |
 
 ### Yeni: Konum bilgisi
 
-- Giriş/çıkış anında **tek seferlik** koordinat alınır. Arka plan takibi **yok**.
-- Yalnızca açık rıza varsa istenir; rıza yoksa `navigator.geolocation` hiç çağrılmaz.
+- Giriş/çıkış anında koordinat alınır; açık mesai süresince uygulama açıkken **18:00'e kadar 15 dakikada bir** konum sinyali gönderilir.
+- Yalnızca açık rıza varsa istenir; rıza yoksa `navigator.geolocation` hiç çağrılmaz. Konum rızası isteğe bağlıdır.
 - Konum alınamazsa işlem **durmaz**, kayıt konumsuz oluşur.
 - 6 ondalık basamağa yuvarlanır (veri minimizasyonu).
 - Sunucu, rıza olmadan gelen konumu **kaydetmez** (istemci gönderse bile).
-- Koordinatlar 90 gün sonra otomatik `NULL`'lanır; puantaj kaydı kalır.
+- Koordinatlar 90 gün sonra otomatik `NULL`'lanır, 15 dk konum geçmişi silinir; puantaj kaydı kalır.
 
 ### Yeni: KVKK açık rıza akışı
 
@@ -108,7 +138,7 @@ Bu betik Node.js 20, MySQL, Nginx, UFW ve PM2'yi otomatik kurar, veritabanını 
 
 3. **Ücretsiz SSL (HTTPS) Kurulumu:**
 ```bash
-sudo certbot --nginx -d takip.erkizmuhendislik.com
+sudo certbot --nginx -d www.erkiztakip.com
 ```
 
 4. **Docker İle Dağıtım (Alternatif):**
@@ -120,7 +150,7 @@ docker compose up -d
 ### Android
 
 ```bash
-echo "ERKIZ_API_BASE=https://takip.erkizmuhendislik.com" >> gradle.properties
+echo "ERKIZ_API_BASE=https://www.erkiztakip.com" >> gradle.properties
 ./gradlew assembleRelease
 ```
 

@@ -26,4 +26,8 @@ class NativeBridge(private val activity: MainActivity) {
 
     @JavascriptInterface
     fun appVersion(): String = activity.appVersion()
+
+    /** Web katmani, http:// sunucuya izin verilip verilmeyecegini buradan ogrenir. */
+    @JavascriptInterface
+    fun isDebugBuild(): Boolean = BuildConfig.DEBUG
 }

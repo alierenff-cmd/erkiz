@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    URETIM (release) yapilandirmasi: sifresiz HTTP tamamen kapali.
+    TC kimlik numaralari yalnizca HTTPS uzerinden gonderilir.
+    Yerel agda http:// ile test icin: app/src/debug/res/xml/network_security_config.xml
+    (yalnizca debug APK'ya girer).
+-->
 <network-security-config>
-    <!-- Yerel agda test ve IP baglantilari icin HTTP izni -->
-    <base-config cleartextTrafficPermitted="true">
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

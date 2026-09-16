@@ -8,42 +8,67 @@
 const Api = (function () {
     'use strict';
 
-    function getBaseUrl() {
+    /**
+     * Sifresiz (http://) sunucuya yalnizca DEBUG APK'da izin verilir.
+     * Uretim APK'sinda TC numaralari asla sifresiz baglantidan gonderilmez.
+     */
+    function insecureAllowed() {
         try {
-            const custom = localStorage.getItem('erkiz_server_url');
-            if (custom && custom.trim().startsWith('http')) {
-                return custom.trim().replace(/\/+$/, '');
-            }
-        } catch(e) {}
+            return !!(window.AndroidBridge && typeof AndroidBridge.isDebugBuild === 'function' &&
+                      AndroidBridge.isDebugBuild());
+        } catch (e) {
+            return false;
+        }
+    }
 
+    function isAcceptableUrl(url) {
+        if (!url) return false;
+        if (url.startsWith('https://')) return true;
+        return url.startsWith('http://') && insecureAllowed();
+    }
+
+    function getBaseUrl() {
         const locOrigin = (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : '';
         const isLocalWeb = locOrigin && (locOrigin.startsWith('http://') || locOrigin.startsWith('https://')) && !locOrigin.includes('appassets.androidplatform.net');
 
+        // Tarayicidan acilan web surumu her zaman kendi sunucusuyla konusur.
         if (isLocalWeb) {
             return locOrigin;
         }
+
+        try {
+            const custom = (localStorage.getItem('erkiz_server_url') || '').trim();
+            if (isAcceptableUrl(custom)) {
+                return custom.replace(/\/+$/, '');
+            }
+        } catch(e) {}
 
         if (window.ErkizConfig && window.ErkizConfig.apiBase && window.ErkizConfig.apiBase.length > 5) {
             return window.ErkizConfig.apiBase.trim().replace(/\/+$/, '');
         }
 
-        return 'http://10.15.2.64:3000';
+        return 'https://www.erkiztakip.com';
     }
 
+    /** @returns {{ok:boolean, error?:string}} */
     function setServerUrl(newUrl) {
         try {
             if (!newUrl || !newUrl.trim()) {
                 localStorage.removeItem('erkiz_server_url');
             } else {
                 let clean = newUrl.trim().replace(/\/+$/, '');
-                if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
-                    clean = 'http://' + clean;
+                if (!/^https?:\/\//.test(clean)) {
+                    clean = (insecureAllowed() ? 'http://' : 'https://') + clean;
+                }
+                if (!isAcceptableUrl(clean)) {
+                    return { ok: false, error: 'Güvenlik nedeniyle yalnızca https:// ile başlayan sunucu adresleri kabul edilir.' };
                 }
                 localStorage.setItem('erkiz_server_url', clean);
             }
         } catch(e) {}
         token = null;
         tokenExpiry = 0;
+        return { ok: true };
     }
 
     async function fetchWithTimeout(url, options = {}, timeoutMs = 6000) {
