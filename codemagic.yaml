@@ -2,15 +2,23 @@ workflows:
   ios-automatic-build:
     name: Erkiz Isci Takip iOS Cloud Build
     max_build_duration: 60
-    instance_type: mac_mini_m1
+    instance_type: mac_mini_m2
+    integrations:
+      # Create this App Store Connect API key integration in Codemagic
+      # Team settings > Integrations > Developer Portal.
+      app_store_connect: erkiz-app-store
     environment:
       node: 20
       xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.erkiz.iscitakip
     scripts:
       - name: Install dependencies
         script: |
           npm install -g @capacitor/cli
-          npm install
+          npm install --no-audit --no-fund
       - name: Add & Sync iOS
         script: |
           npx cap add ios || true
@@ -19,11 +27,30 @@ workflows:
       - name: CocoaPods Install
         script: |
           cd ios/App
-          pod install
-      - name: Xcode Build
+          pod install --repo-update
+      - name: Configure iOS signing
+        script: |
+          xcode-project use-profiles
+      - name: Archive signed iOS app
         script: |
           cd ios/App
-          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -destination 'generic/platform=iOS' CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+          xcodebuild -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/App.xcarchive \
+            archive
+      - name: Export signed IPA
+        script: |
+          cd ios/App
+          xcodebuild -exportArchive \
+            -archivePath build/App.xcarchive \
+            -exportOptionsPlist /Users/builder/export_options.plist \
+            -exportPath build/export
     artifacts:
-      - ios/App/build/**/*.ipa
-      - ios/App/build/**/*.app
+      - ios/App/build/export/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
