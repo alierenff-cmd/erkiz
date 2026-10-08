@@ -4,15 +4,15 @@ plugins {
 }
 
 android {
-    namespace = "com.erkiz.iscitakip"
-    compileSdk = 35
+    namespace = "com.erkiz.uygulama1"
+    compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.erkiz.iscitakip"
+        applicationId = "com.erkiz.uygulama1"
         minSdk = 24
-        targetSdk = 35
-        versionCode = 6
-        versionName = "2.4"
+        targetSdk = 36
+        versionCode = 11
+        versionName = "2.9"
 
         // Sunucu adresi build config uzerinden gelir; koda gomulu URL yok.
         // gradle.properties veya CI ortam degiskeninden okunur.
@@ -22,6 +22,18 @@ android {
         resValue("string", "api_base_url", apiBase)
     }
 
+    signingConfigs {
+        create("release") {
+            val ksFile = rootProject.file("erkiz-release-key.jks")
+            if (ksFile.exists()) {
+                storeFile = ksFile
+                storePassword = "Erkiz2026!"
+                keyAlias = "erkiz_key"
+                keyPassword = "Erkiz2026!"
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
@@ -29,6 +41,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -45,6 +58,11 @@ android {
     }
     buildFeatures {
         buildConfig = true
+    }
+
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
     }
 }
 

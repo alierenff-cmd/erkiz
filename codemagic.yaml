@@ -24,6 +24,7 @@ workflows:
           npx cap add ios || true
           npx cap copy ios
           npx cap sync ios
+          npx @capacitor/assets generate --ios --assetPath resources --iconBackgroundColor '#ffffff' --iconBackgroundColorDark '#ffffff'
       - name: CocoaPods Install
         script: |
           cd ios/App
@@ -31,6 +32,8 @@ workflows:
       - name: Configure iOS signing
         script: |
           xcode-project use-profiles
+          cd ios/App
+          agvtool new-version -all 2
       - name: Archive signed iOS app
         script: |
           cd ios/App
